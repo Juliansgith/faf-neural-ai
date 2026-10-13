@@ -1,0 +1,42 @@
+From 999b2fb1cfd2ec3687dff0811a9b0b82526bb9b1 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 15:12:41 +0200
+Subject: [PATCH 12/52] Clamp the issue thread's late-beat count at high sim
+ rates
+
+At +20 and above a beat lasts under a millisecond, so after a long sim stall
+(a debugger pause, a blocked sim thread) the late-beat count overflowed int
+in the float-to-int conversion and the issue thread stopped issuing beats.
+Clamp before converting; anything beyond the catch-up ceiling is discarded
+anyway.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 8960e60f06b9191c6392c9a6483067c6f7a40119)
+(cherry picked from commit 421ff2fda42af2e36878e960482358e941c98003)
+---
+ src/sdk/moho/sim/SimDriver.cpp | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/src/sdk/moho/sim/SimDriver.cpp b/src/sdk/moho/sim/SimDriver.cpp
+index 842beaf2..4d3b3420 100644
+--- a/src/sdk/moho/sim/SimDriver.cpp
++++ b/src/sdk/moho/sim/SimDriver.cpp
+@@ -1414,10 +1414,13 @@ void CSimDriver::ThreadRun()
+           // Behind schedule: issue however many whole beats have come due, but
+           // never further ahead of the executed beat than two seconds' worth.
+           const float lateMilliseconds = gpg::time::CyclesToMilliseconds(now - dueAt);
+-          const float lateBeats = (1.0f / millisecondsPerBeat) * lateMilliseconds;
++          // Clamped (engine fix): at +20 and above a beat is under a millisecond, so a long sim
++          // stall made this overflow `int` and the thread stopped issuing. Anything past the
++          // catch-up ceiling below is discarded anyway.
++          const float lateBeats = std::min((1.0f / millisecondsPerBeat) * lateMilliseconds, 1.0e8f);
+           lastBeatToIssue = static_cast<int>(std::floor(lateBeats)) + mNextIssueBeat;
+ 
+-          int catchUpCeiling = static_cast<int>((1.0f / millisecondsPerBeat) * 2000.0f);
++          int catchUpCeiling = static_cast<int>(std::min((1.0f / millisecondsPerBeat) * 2000.0f, 1.0e8f));
+           if (catchUpCeiling > kMaxCatchUpBeats) {
+             catchUpCeiling = kMaxCatchUpBeats;
+           }
+-- 
+2.55.0.windows.3
+

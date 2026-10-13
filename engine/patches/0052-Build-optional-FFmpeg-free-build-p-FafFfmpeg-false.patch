@@ -1,0 +1,176 @@
+From bb9647cf462e2a1c3d17ca62680f54cce190260a Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 23:44:11 +0200
+Subject: [PATCH 52/52] Build: optional FFmpeg-free build (/p:FafFfmpeg=false)
+
+Upstream's movie player (6ac2dba0) links FFmpeg 7.1 import libraries and needs
+its DLLs beside main.exe, and the build stops without the FFmpeg development
+package. /p:FafFfmpeg=false (or FafFfmpeg=false in the environment) builds
+without it: FfmpegSfdDecoder.cpp is replaced by FfmpegSfdDecoderDisabled.cpp,
+whose Open always throws, so IndependentSfdBackend reports every .sfd movie as
+unplayable the way it does a missing file; no FFmpeg library is linked, checked
+for or staged. Meant for headless and automated games, which never show a
+movie. The default (FafFfmpeg=true) is unchanged.
+---
+ src/sdk/main.vcxproj                          | 22 ++++++--
+ src/sdk/main.vcxproj.filters                  |  1 +
+ .../movie/sfd/FfmpegSfdDecoderDisabled.cpp    | 56 +++++++++++++++++++
+ 3 files changed, 73 insertions(+), 6 deletions(-)
+ create mode 100644 src/sdk/moho/movie/sfd/FfmpegSfdDecoderDisabled.cpp
+
+diff --git a/src/sdk/main.vcxproj b/src/sdk/main.vcxproj
+index a602cd31..6b0a73a5 100644
+--- a/src/sdk/main.vcxproj
++++ b/src/sdk/main.vcxproj
+@@ -161,6 +161,12 @@
+   </PropertyGroup>
+   <PropertyGroup>
+     <FafFfmpegRoot Condition="'$(FafFfmpegRoot)'==''">$(FafRepoRoot)dependencies\ffmpeg\$(Platform)</FafFfmpegRoot>
++    <!-- /p:FafFfmpeg=false builds without FFmpeg: no FFmpeg headers, import libraries or DLLs are
++         needed, and every .sfd movie fails to open (moho\movie\sfd\FfmpegSfdDecoderDisabled.cpp).
++         For headless/automated use where no movie is ever watched. -->
++    <FafFfmpeg Condition="'$(FafFfmpeg)'==''">true</FafFfmpeg>
++    <FafFfmpegLibs>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;</FafFfmpegLibs>
++    <FafFfmpegLibs Condition="'$(FafFfmpeg)'=='false'"></FafFfmpegLibs>
+   </PropertyGroup>
+   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+     <ClCompile>
+@@ -216,7 +222,7 @@
+       <SubSystem>Windows</SubSystem>
+       <GenerateDebugInformation>true</GenerateDebugInformation>
+       <AdditionalLibraryDirectories>$(FafFfmpegRoot)\lib;$(DirectXLibX86);$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+-      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <AdditionalDependencies>$(FafFfmpegLibs)ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;%(AdditionalDependencies)</AdditionalDependencies>
+       <AdditionalOptions>/IGNORE:4006 %(AdditionalOptions)</AdditionalOptions>
+       <IgnoreSpecificDefaultLibraries>msvcrt.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+       <ForceFileOutput>Enabled</ForceFileOutput>
+@@ -268,7 +274,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+       <SubSystem>Windows</SubSystem>
+       <GenerateDebugInformation>true</GenerateDebugInformation>
+       <AdditionalLibraryDirectories>$(FafFfmpegRoot)\lib;$(DirectXLibX86);$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+-      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <AdditionalDependencies>$(FafFfmpegLibs)ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;%(AdditionalDependencies)</AdditionalDependencies>
+       <AdditionalOptions>/IGNORE:4006 %(AdditionalOptions)</AdditionalOptions>
+       <!-- Mirror of the Debug link, which excludes the release CRT so nothing
+            can drag it in beside the debug one. This configuration uses the
+@@ -340,7 +346,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+       <SubSystem>Windows</SubSystem>
+       <GenerateDebugInformation>true</GenerateDebugInformation>
+       <AdditionalLibraryDirectories>$(FafFfmpegRoot)\lib;$(DirectXLibX64);$(FafRepoRoot)dependencies\zlib-1.2.3;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+-      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <AdditionalDependencies>$(FafFfmpegLibs)ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;%(AdditionalDependencies)</AdditionalDependencies>
+       <AdditionalOptions>/IGNORE:4006 $(FafX64AddressLinkOptions) %(AdditionalOptions)</AdditionalOptions>
+       <IgnoreSpecificDefaultLibraries>msvcrt.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+       <ForceFileOutput>Enabled</ForceFileOutput>
+@@ -377,7 +383,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+       <SubSystem>Windows</SubSystem>
+       <GenerateDebugInformation>true</GenerateDebugInformation>
+       <AdditionalLibraryDirectories>$(FafFfmpegRoot)\lib;$(DirectXLibX64);$(FafRepoRoot)dependencies\zlib-1.2.3;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+-      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <AdditionalDependencies>$(FafFfmpegLibs)ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;%(AdditionalDependencies)</AdditionalDependencies>
+       <AdditionalOptions>/IGNORE:4006 $(FafX64AddressLinkOptions) %(AdditionalOptions)</AdditionalOptions>
+       <IgnoreSpecificDefaultLibraries>msvcrtd.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+       <ForceFileOutput>Enabled</ForceFileOutput>
+@@ -2564,19 +2570,23 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+     <ClCompile Include="moho\movie\sfd\SfdHeaderParser.cpp" />
+     <ClInclude Include="moho\movie\sfd\SfdHeaderParser.h" />
+     <ClCompile Include="moho\movie\sfd\FfmpegSfdDecoder.cpp">
++      <ExcludedFromBuild Condition="'$(FafFfmpeg)'=='false'">true</ExcludedFromBuild>
+       <AdditionalOptions>/external:I"$(FafFfmpegRoot)\include" %(AdditionalOptions)</AdditionalOptions>
+       <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+     </ClCompile>
+     <ClInclude Include="moho\movie\sfd\FfmpegSfdDecoder.h" />
++    <ClCompile Include="moho\movie\sfd\FfmpegSfdDecoderDisabled.cpp">
++      <ExcludedFromBuild Condition="'$(FafFfmpeg)'!='false'">true</ExcludedFromBuild>
++    </ClCompile>
+     <ClCompile Include="moho\movie\sfd\DirectSoundMovieSink.cpp" />
+     <ClInclude Include="moho\movie\sfd\DirectSoundMovieSink.h" />
+     <ClCompile Include="moho\movie\sfd\SfdMetadata.cpp" />
+     <ClInclude Include="moho\movie\sfd\SfdMetadata.h" />
+   </ItemGroup>
+   <Target Name="CheckFafFfmpeg" BeforeTargets="ClCompile">
+-    <Error Condition="!Exists('$(FafFfmpegRoot)\include\libavcodec\avcodec.h')" Text="FFmpeg development package missing. Set FafFfmpegRoot; see docs/FAF_SFD_COMPATIBILITY.md." />
++    <Error Condition="'$(FafFfmpeg)'!='false' and !Exists('$(FafFfmpegRoot)\include\libavcodec\avcodec.h')" Text="FFmpeg development package missing. Set FafFfmpegRoot; see docs/FAF_SFD_COMPATIBILITY.md." />
+   </Target>
+-  <Target Name="StageFafFfmpeg" AfterTargets="Build">
++  <Target Name="StageFafFfmpeg" AfterTargets="Build" Condition="'$(FafFfmpeg)'!='false'">
+     <ItemGroup><FafFfmpegDll Include="$(FafFfmpegRoot)\bin\*.dll" /></ItemGroup>
+     <Copy SourceFiles="@(FafFfmpegDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+     <Copy Condition="'$(FafStageToRunDir)'=='true' and Exists('$(FafRunDir)')" SourceFiles="@(FafFfmpegDll)" DestinationFolder="$(FafRunDir)" SkipUnchangedFiles="true" />
+diff --git a/src/sdk/main.vcxproj.filters b/src/sdk/main.vcxproj.filters
+index 3f0d434c..3ea66722 100644
+--- a/src/sdk/main.vcxproj.filters
++++ b/src/sdk/main.vcxproj.filters
+@@ -5567,6 +5567,7 @@
+     <ClCompile Include="moho\movie\sfd\SfdHeaderParser.cpp" />
+     <ClInclude Include="moho\movie\sfd\SfdHeaderParser.h" />
+     <ClCompile Include="moho\movie\sfd\FfmpegSfdDecoder.cpp" />
++    <ClCompile Include="moho\movie\sfd\FfmpegSfdDecoderDisabled.cpp" />
+     <ClInclude Include="moho\movie\sfd\FfmpegSfdDecoder.h" />
+     <ClCompile Include="moho\movie\sfd\DirectSoundMovieSink.cpp" />
+     <ClInclude Include="moho\movie\sfd\DirectSoundMovieSink.h" />
+diff --git a/src/sdk/moho/movie/sfd/FfmpegSfdDecoderDisabled.cpp b/src/sdk/moho/movie/sfd/FfmpegSfdDecoderDisabled.cpp
+new file mode 100644
+index 00000000..be042176
+--- /dev/null
++++ b/src/sdk/moho/movie/sfd/FfmpegSfdDecoderDisabled.cpp
+@@ -0,0 +1,56 @@
++// Build option, not recovered from the binary: the FfmpegDecoder for an engine built with
++// /p:FafFfmpeg=false, which links no FFmpeg libraries and ships no FFmpeg DLLs. Every Open fails, so
++// IndependentSfdBackend's Player::Open reports the movie as unplayable, as it does for a missing
++// file. Meant for headless/automated use where no .sfd movie is ever watched.
++#include "moho/movie/sfd/FfmpegSfdDecoder.h"
++
++#include <stdexcept>
++
++namespace moho::sfd
++{
++  struct FfmpegDecoder::Impl
++  {
++  };
++
++  FfmpegDecoder::FfmpegDecoder() = default;
++  FfmpegDecoder::~FfmpegDecoder() = default;
++
++  void FfmpegDecoder::Open(const char* const filename, const bool decodeAudio)
++  {
++    (void)decodeAudio;
++    throw std::runtime_error(
++      std::string("movie playback is disabled in this build (FafFfmpeg=false): ") + (filename ? filename : "")
++    );
++  }
++
++  bool FfmpegDecoder::Read(DecodeBatch& batch)
++  {
++    (void)batch;
++    return false;
++  }
++
++  bool FfmpegDecoder::HasAudio() const
++  {
++    return false;
++  }
++
++  int FfmpegDecoder::Width() const
++  {
++    return 0;
++  }
++
++  int FfmpegDecoder::Height() const
++  {
++    return 0;
++  }
++
++  int FfmpegDecoder::AudioSampleRate() const
++  {
++    return 0;
++  }
++
++  int FfmpegDecoder::AudioChannels() const
++  {
++    return 0;
++  }
++} // namespace moho::sfd
+-- 
+2.55.0.windows.3
+

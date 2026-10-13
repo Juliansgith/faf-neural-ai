@@ -1,0 +1,186 @@
+From 56d3b0a7abc46a552534172c309b63aaaeb91b09 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 23:20:03 +0200
+Subject: [PATCH 47/52] Agent: /agenttraining skips the beat packets' entity
+ records
+
+Training mode for minimized training games, which nobody watches: the sim
+skips work whose only consumer is the user session that draws the game
+(AGENT_TrainingMode, inert without /agentbridge).
+
+First use: Sim::Sync walks every dirty entity each beat and copies its
+variable data into the beat's packet - a create record for new entities, an
+update record (the whole SSTIUnitVariableData / SSTIEntityVariableData) for
+changed ones, a delete id for dead ones - for the user session to build and
+move its UserEntity/UserUnit mirrors. In training mode the walk runs with no
+packet: every entity still does its Sync bookkeeping (visibility, interface
+flags, command-queue snapshots, weapon info, pose references, the blip
+vision radius, the dirty-list unlink), but no record is copied. The few
+writers that assumed a packet (Entity::CreateInterface's queue,
+Entity::DestroyInterface, Prop::Sync) now tolerate a null one, as the unit
+queues already did. The Lua Sync table, army data, command events and the
+rest of the packet are unchanged.
+
+Measured (all-AI benchmark, SCMP_019 1v1, 30 min, per-step minimum of
+repeated runs): Sim::Sync drops from 7.3 % to 4.3 % of the sim thread, and
+the user thread from ~20 % to ~8 % of a core. But the records held the last
+references to the units' per-tick animation poses; without them the sim
+thread frees the poses itself, so in that game the sim thread is ~4 %
+slower overall (+9..14 % at minutes 5-20, -2..4 % after 25) while the whole
+process uses ~7 % less CPU. In a 4-AI 20 km game (1400 units) the sim thread
+was 9-16 % faster at minutes 15-25 (single runs). So: a throughput gain when
+many games share the CPU (training), not a latency gain for one game.
+(Handing the pose references to the user thread instead moved the cost into
+allocator refills under the heap lock; not worth it.)
+
+Verified: per-beat sim checksums of the 30-minute all-AI game (SCMP_019,
+adaptive vs adaptive, seed 7) with /agenttraining identical to the unchanged
+build's (without it) over all 18002 beats.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 2d37acb61c12f649f5511aa5ba0af90e1f64ce05)
+(cherry picked from commit 661a8cc91641de9acfeaed60e698d64d72c73c51)
+---
+ src/sdk/moho/agent/AgentBridge.cpp |  8 ++++++++
+ src/sdk/moho/agent/AgentBridge.h   | 14 ++++++++++++++
+ src/sdk/moho/entity/Entity.cpp     |  7 ++++++-
+ src/sdk/moho/entity/Prop.cpp       |  4 +++-
+ src/sdk/moho/sim/Sim.cpp           | 11 +++++++++--
+ 5 files changed, 40 insertions(+), 4 deletions(-)
+
+diff --git a/src/sdk/moho/agent/AgentBridge.cpp b/src/sdk/moho/agent/AgentBridge.cpp
+index f9bdc4b2..1c5d93af 100644
+--- a/src/sdk/moho/agent/AgentBridge.cpp
++++ b/src/sdk/moho/agent/AgentBridge.cpp
+@@ -67,6 +67,7 @@ namespace moho
+       int connectTimeoutSeconds = kDefaultConnectTimeoutSeconds;
+       bool keepVisualEffects = false;
+       bool leanLoading = false;
++      bool trainingMode = false;
+       int watchdogSeconds = 60;
+       int checksumPeriod = 0; // /agentchecksum: sim_ChecksumPeriod for the session (0: the sim's own, 50)
+     };
+@@ -119,6 +120,7 @@ namespace moho
+       }
+       config.keepVisualEffects = CFG_GetArgOption("/agentvfx", 0, nullptr);
+       config.leanLoading = CFG_GetArgOption("/agentlean", 0, nullptr);
++      config.trainingMode = CFG_GetArgOption("/agenttraining", 0, nullptr);
+       if (CFG_GetArgOption("/agentwatchdog", 1, &args) && !args.empty()) {
+         config.watchdogSeconds = std::max(0, ParseIntArgument(args[0], config.watchdogSeconds));
+       }
+@@ -1601,4 +1603,10 @@ namespace moho
+     const AgentBridgeConfig& config = Config();
+     return config.enabled && config.leanLoading;
+   }
++
++  bool AGENT_TrainingMode()
++  {
++    const AgentBridgeConfig& config = Config();
++    return config.enabled && config.trainingMode;
++  }
+ } // namespace moho
+diff --git a/src/sdk/moho/agent/AgentBridge.h b/src/sdk/moho/agent/AgentBridge.h
+index ce66a195..9ebfebcd 100644
+--- a/src/sdk/moho/agent/AgentBridge.h
++++ b/src/sdk/moho/agent/AgentBridge.h
+@@ -19,6 +19,8 @@ namespace moho
+    *                          10 is the fastest normal game speed and 0 is real time
+    *   /agenttimeout <secs>   how long to keep retrying the initial connection (default 60)
+    *   /agentvfx              keep particle effects while unpaced (skipped by default then)
++   *   /agenttraining         training mode: skip sim work only a watching human needs (see
++   *                          AGENT_TrainingMode); for minimized training games
+    *   /agentlean             skip loading work that only feeds the renderer (strategic-icon textures,
+    *                          searches for implicit mesh material textures); for training games that are
+    *                          never drawn
+@@ -113,4 +115,16 @@ namespace moho
+    * already copes with an icon or texture that is missing.
+    */
+   [[nodiscard]] bool AGENT_SkipRenderOnlyAssets();
++
++  /**
++   * True with /agenttraining (and the bridge on): the sim skips work whose only consumer is the user
++   * session that draws the game - nobody watches a training game. What it skips must not change the
++   * simulation; each use says why it cannot, and the per-beat sim checksums (/checksumlog) of all-AI games
++   * with and without the switch are identical:
++   *   - Sim::Sync runs every dirty entity's Sync with no packet: the entity bookkeeping (interface flags,
++   *     visibility, command-queue snapshots, the dirty list) is done as always, but no create / update /
++   *     delete record is copied into the beat's packet, so the user session builds no UserEntity or
++   *     UserUnit and its per-beat work shrinks with it.
++   */
++  [[nodiscard]] bool AGENT_TrainingMode();
+ } // namespace moho
+diff --git a/src/sdk/moho/entity/Entity.cpp b/src/sdk/moho/entity/Entity.cpp
+index 3d56bf35..f5b61a2f 100644
+--- a/src/sdk/moho/entity/Entity.cpp
++++ b/src/sdk/moho/entity/Entity.cpp
+@@ -251,6 +251,9 @@ namespace
+     const moho::SCreateEntityParams& params
+   )
+   {
++    if (syncData == nullptr) { // agent training mode: no packet (AGENT_TrainingMode)
++      return nullptr;
++    }
+     syncData->mNewEntities.push_back(params);
+     return &syncData->mNewEntities.back();
+   }
+@@ -3133,7 +3136,9 @@ namespace moho
+    */
+   void Entity::DestroyInterface(SSyncData* const syncData)
+   {
+-    syncData->mDeleteIds.push_back(id_);
++    if (syncData != nullptr) { // agent training mode: no packet (AGENT_TrainingMode)
++      syncData->mDeleteIds.push_back(id_);
++    }
+     mInterfaceCreated = 0u;
+   }
+ 
+diff --git a/src/sdk/moho/entity/Prop.cpp b/src/sdk/moho/entity/Prop.cpp
+index a1a8ec3e..954a64e9 100644
+--- a/src/sdk/moho/entity/Prop.cpp
++++ b/src/sdk/moho/entity/Prop.cpp
+@@ -763,7 +763,9 @@ namespace moho
+         // 1:1 dual-branch push (asm 0x006FA2B8 selector on +0x279): a
+         // terminated (reclaimed/killed) prop is erased immediately, otherwise
+         // it is queued for deferred deletion.
+-        if (mReclaimTerminated) {
++        if (syncData == nullptr) {
++          // agent training mode: no packet (AGENT_TrainingMode)
++        } else if (mReclaimTerminated) {
+           syncData->mEraseIds.push_back(id_);
+         } else {
+           syncData->mDeleteIds.push_back(id_);
+diff --git a/src/sdk/moho/sim/Sim.cpp b/src/sdk/moho/sim/Sim.cpp
+index 46c24bda..eff828d6 100644
+--- a/src/sdk/moho/sim/Sim.cpp
++++ b/src/sdk/moho/sim/Sim.cpp
+@@ -5537,10 +5537,17 @@ void Sim::Sync(const SSyncFilter& filter, SSyncData*& outSyncData)
+   // both count into `Sync_Entity_Count`. The incremental walk advances to the
+   // successor BEFORE dispatching (`mov esi, [esi+4]` precedes the call),
+   // because `Entity::Sync` unlinks the node it was reached through.
++  //
++  // Engine addition (agent training mode, AGENT_TrainingMode): the walk runs
++  // with no packet. Every entity still does its Sync bookkeeping, but no
++  // record is copied for the user session, which nobody watches in a training
++  // game. The records are copies of sim state that only the user session
++  // reads.
++  SSyncData* const entitySyncData = AGENT_TrainingMode() ? nullptr : outSyncData;
+   std::int32_t syncedEntityCount = 0;
+   if (focusArmyChanged) {
+     ForEachAllArmyUnit(this, [&](Unit* const unit) {
+-      unit->Sync(outSyncData);
++      unit->Sync(entitySyncData);
+       ++syncedEntityCount;
+     });
+   } else {
+@@ -5549,7 +5556,7 @@ void Sim::Sync(const SSyncFilter& filter, SSyncData*& outSyncData)
+       Entity* const entity = *it;
+       ++it;
+       if (entity != nullptr) {
+-        entity->Sync(outSyncData);
++        entity->Sync(entitySyncData);
+         ++syncedEntityCount;
+       }
+     }
+-- 
+2.55.0.windows.3
+

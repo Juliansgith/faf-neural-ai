@@ -1,0 +1,146 @@
+From 3ebafc3fdb4476c97beae3ee7c9ad3d195450caa Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 22:15:27 +0200
+Subject: [PATCH 23/52] Issue sim-script stop/pause/kill orders without a
+ command-stream id check
+
+IssueStop, IssuePause, IssueKillSelf and IssueDestroySelf (0x006F1AB0,
+0x006F1C50, 0x006F6F50, 0x006F70D0) build their issue data and call
+UNIT_IssueCommand (0x006F12C0) directly, like every other sim-script
+Issue* function. The rebuild sent them through Sim::IssueCommand, the
+command-stream entry point, whose ValidateNewCommandId checks the
+network command id against the current command source. A script order
+carries no id (0xFFFFFFFF), so every one was dropped:
+
+  IssueCommand: ignoring issue of cmd id 0xffffffff from <player>
+  because the id's source (255) is wrong (should be 0)
+
+650-900 times per skirmish, mostly FAF's AI (platoons, engineers and
+transports stopping units) and CommandUnit.OnStartBuild; none of those
+units ever stopped, paused or self-destructed on script request.
+
+CUnitUnloadUnits::TaskTick had the same mistake for the move it gives
+units unloaded by a staging platform or a stationary transport
+(0x006269FC: UNIT_IssueCommand(sim, detached, issueData, clear = 1)).
+
+(cherry picked from commit ea92757a580669212c9bfe47cceb76acaa046f1c)
+
+Ported onto 8977bb9d: upstream rewrote the selection helpers next to the deleted BuildSelectedEntitySetFromUnits; only the helper is removed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+(cherry picked from commit 91c8b8120c18b3857ba7bdea85f163004e938dc3)
+
+Ported onto 13ce9e55: upstream 132819e1 folded SEntitySetTemplateUnit/ArmyUnitSet into EntitySetTemplate<Unit>; the selections are built with its copy constructor and Add.
+---
+ .../sim/CCommandLuaFunctionRegistrations.cpp  | 30 +++++++++----------
+ src/sdk/moho/unit/tasks/CUnitUnloadUnits.cpp  | 23 +++++++-------
+ 2 files changed, 25 insertions(+), 28 deletions(-)
+
+diff --git a/src/sdk/moho/sim/CCommandLuaFunctionRegistrations.cpp b/src/sdk/moho/sim/CCommandLuaFunctionRegistrations.cpp
+index 4fe5fdf4..ec08484b 100644
+--- a/src/sdk/moho/sim/CCommandLuaFunctionRegistrations.cpp
++++ b/src/sdk/moho/sim/CCommandLuaFunctionRegistrations.cpp
+@@ -409,19 +409,6 @@ namespace
+     return static_cast<int>(lua_tonumber(rawState, countObject.m_stackIndex));
+   }
+ 
+-  [[nodiscard]] moho::BVSet<moho::EntId, moho::EntIdUniverse> BuildSelectedEntitySetFromUnits(const moho::UnitSet& units)
+-  {
+-    moho::BVSet<moho::EntId, moho::EntIdUniverse> selectedUnits{};
+-    for (moho::Unit* const unit : units) {
+-      if (unit == nullptr) {
+-        continue;
+-      }
+-
+-      (void)selectedUnits.mBits.Add(static_cast<unsigned int>(unit->id_));
+-    }
+-    return selectedUnits;
+-  }
+-
+   // ---- UISelectionByCategory support (FUN_008662B0) ----
+ 
+   [[nodiscard]] const Wm3::Box3f* SelectionEntityMeshBox(moho::UserEntity* const entity)
+@@ -901,6 +888,17 @@ namespace
+     return !outUnits.Empty();
+   }
+ 
++  /**
++   * The shared body of `IssueStop` / `IssuePause` / `IssueKillSelf` / `IssueDestroySelf` (0x006F1AB0,
++   * 0x006F1C50, 0x006F6F50, 0x006F70D0): each builds the issue data for its command type and hands the unit
++   * set straight to `UNIT_IssueCommand` (0x006F12C0, `call 0x6F12C0` with clearQueue = 0).
++   *
++   * These are sim-script orders, not a client's: they must not go through `Sim::IssueCommand`, the
++   * command-stream entry point, which validates the network command id against the current command
++   * source. A script order carries no id (0xFFFFFFFF), so every one of them was dropped with "IssueCommand:
++   * ignoring issue of cmd id 0xffffffff ... the id's source (255) is wrong" -- FAF's AI and unit scripts
++   * could not stop, pause or self-destruct a unit.
++   */
+   void IssueSimpleUnitCommand(
+     moho::Sim* const sim,
+     const moho::UnitSet& units,
+@@ -911,13 +909,13 @@ namespace
+       return;
+     }
+ 
+-    const moho::BVSet<moho::EntId, moho::EntIdUniverse> selectedUnits = BuildSelectedEntitySetFromUnits(units);
+-    if (selectedUnits.mBits.Count() == 0) {
++    moho::EntitySetTemplate<moho::Unit> selectedUnits(units);
++    if (selectedUnits.Empty()) {
+       return;
+     }
+ 
+     moho::SSTICommandIssueData commandIssueData(commandType);
+-    sim->IssueCommand(selectedUnits, commandIssueData, false);
++    (void)moho::IssueCommandToSelectedUnits(sim, selectedUnits, commandIssueData, false);
+   }
+ 
+   [[nodiscard]] int ResolveFormationScriptIndex(
+diff --git a/src/sdk/moho/unit/tasks/CUnitUnloadUnits.cpp b/src/sdk/moho/unit/tasks/CUnitUnloadUnits.cpp
+index 264d2be2..3ce00a41 100644
+--- a/src/sdk/moho/unit/tasks/CUnitUnloadUnits.cpp
++++ b/src/sdk/moho/unit/tasks/CUnitUnloadUnits.cpp
+@@ -93,19 +93,13 @@ namespace
+   // into `CUnitUnloadUnits::MemberDeserialize`/`MemberSerialize` via the
+   // template body.
+ 
+-  [[nodiscard]]
+-  moho::BVSet<moho::EntId, moho::EntIdUniverse> BuildSelectedEntitySetFromUnits(
+-    const moho::EntitySetTemplate<moho::Unit>& units
+-  )
++  void AddUsableDetachedUnits(moho::EntitySetTemplate<moho::Unit>& selected, const moho::EntitySetTemplate<moho::Unit>& units)
+   {
+-    moho::BVSet<moho::EntId, moho::EntIdUniverse> selected{};
+     for (moho::Unit* const unit : units) {
+-      if (!IsUsableDetachedUnit(unit)) {
+-        continue;
++      if (IsUsableDetachedUnit(unit)) {
++        (void)selected.Add(unit);
+       }
+-      (void)selected.mBits.Add(static_cast<unsigned int>(unit->id_));
+     }
+-    return selected;
+   }
+ } // namespace
+ 
+@@ -417,9 +411,14 @@ namespace moho
+           commandIssueData.mTarget.mEntityId = kGroundTargetEntityIdTag;
+           commandIssueData.mTarget.mPos = unloadWorldPos;
+ 
+-          const BVSet<EntId, EntIdUniverse> selectedUnits = BuildSelectedEntitySetFromUnits(detachedUnits);
+-          if (selectedUnits.mBits.Count() != 0u) {
+-            mUnit->SimulationRef->IssueCommand(selectedUnits, commandIssueData, true);
++          // 0x006269EB..0x006269FC: `UNIT_IssueCommand(sim, detachedUnits, issueData, clearQueue = 1)` -- a
++          // sim-internal order. Through `Sim::IssueCommand` (the command-stream entry) it was rejected for
++          // its missing network command id, so units leaving a staging platform or a factory-like
++          // transport never got their move off it.
++          EntitySetTemplate<Unit> selectedUnits{};
++          AddUsableDetachedUnits(selectedUnits, detachedUnits);
++          if (!selectedUnits.Empty()) {
++            (void)IssueCommandToSelectedUnits(mUnit->SimulationRef, selectedUnits, commandIssueData, true);
+           }
+         }
+ 
+-- 
+2.55.0.windows.3
+

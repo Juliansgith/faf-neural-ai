@@ -1,0 +1,1014 @@
+From 7b935e3dc51b9b4a5b6dabb9feac8dfa4216dc04 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 20:47:07 +0200
+Subject: [PATCH 32/52] Agent: native unit list for observations
+ (AgentBridge_ObserveUnits)
+
+The bridge script builds every observation in sim Lua; its unit list is
+most of that work -- a dozen engine calls per unit through the Lua
+binding layer, a Lua table per unit, and the JSON encoder walking all of
+it again (in a 37-minute teacher game, 5-14 ms per observation, most of
+it in the own-unit part: command queue, can-build checks, a failing
+GetShieldRatio call caught by pcall).
+
+AgentBridge_ObserveUnits(ctx) builds the same list as JSON in C++ from
+the same engine state the bindings read (entity/unit variable data,
+command queue, focus, unit attributes, CanBuild, silo counts, cargo,
+script bits, recon blip flags) and returns a light-userdata token that
+EncodeLuaValue replaces with that text. It also sums the unit part of the
+script's privileged summary. What the script decides stays in Lua and is
+asked through the context table: the unit list (brain:GetListOfUnits,
+which FAF overrides), and per blueprint -- once per session -- the
+buildable list, the toggle bits and the UnitKind facts.
+
+The script keeps its Lua build as the fallback and reference: a test game
+with both builds in every observation (1210 observations, 227891 unit
+records) matched byte for byte.
+
+AgentInternal.h shares the JSON helpers between the two files.
+
+(cherry picked from commit 82fa1769235c3c253b1d8cb8dec9f040f15bc9b8)
+
+Ported onto 8977bb9d: upstream's lua_call is the unprotected call (fba488d1); the two status-checked calls use LuaCallProtected, the old behaviour.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+(cherry picked from commit 89c876e5d92fc341b42f60faf679a7f91a1415ff)
+
+Ported onto 13ce9e55: EntitySetTemplate<Unit> iterates with its own iterator now (upstream 132819e1); the cargo count reads Size().
+---
+ src/sdk/main.vcxproj                |   2 +
+ src/sdk/main.vcxproj.filters        |   3 +
+ src/sdk/moho/agent/AgentBridge.cpp  |  26 +
+ src/sdk/moho/agent/AgentInternal.h  |  36 ++
+ src/sdk/moho/agent/AgentObserve.cpp | 825 ++++++++++++++++++++++++++++
+ 5 files changed, 892 insertions(+)
+ create mode 100644 src/sdk/moho/agent/AgentInternal.h
+ create mode 100644 src/sdk/moho/agent/AgentObserve.cpp
+
+diff --git a/src/sdk/main.vcxproj b/src/sdk/main.vcxproj
+index 19e8523a..c6ac4dad 100644
+--- a/src/sdk/main.vcxproj
++++ b/src/sdk/main.vcxproj
+@@ -741,6 +741,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+     <ClCompile Include="moho\sim\IArmyTypeInfo.cpp" />
+     <ClCompile Include="moho\sim\SimDriver.cpp" />
+     <ClCompile Include="moho\agent\AgentBridge.cpp" />
++    <ClCompile Include="moho\agent\AgentObserve.cpp" />
+     <ClCompile Include="moho\sim\SimWorkerPool.cpp" />
+     <ClCompile Include="moho\sim\SSyncFilter.cpp" />
+     <ClCompile Include="moho\sim\SSTIArmyConstantData.cpp" />
+@@ -2223,6 +2224,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+     <ClInclude Include="moho\sim\SimArmyTypeInfo.h" />
+     <ClInclude Include="moho\sim\SimDriver.h" />
+     <ClInclude Include="moho\agent\AgentBridge.h" />
++    <ClInclude Include="moho\agent\AgentInternal.h" />
+     <ClInclude Include="moho\sim\SimThreadRole.h" />
+     <ClInclude Include="moho\sim\SimWorkerPool.h" />
+     <ClInclude Include="moho\sim\SSyncFilter.h" />
+diff --git a/src/sdk/main.vcxproj.filters b/src/sdk/main.vcxproj.filters
+index 86d11c24..3f0d434c 100644
+--- a/src/sdk/main.vcxproj.filters
++++ b/src/sdk/main.vcxproj.filters
+@@ -258,6 +258,9 @@
+     <ClCompile Include="moho\agent\AgentBridge.cpp">
+       <Filter>Source Files</Filter>
+     </ClCompile>
++    <ClCompile Include="moho\agent\AgentObserve.cpp">
++      <Filter>Source Files</Filter>
++    </ClCompile>
+     <ClCompile Include="moho\sim\SimWorkerPool.cpp">
+       <Filter>Source Files</Filter>
+     </ClCompile>
+diff --git a/src/sdk/moho/agent/AgentBridge.cpp b/src/sdk/moho/agent/AgentBridge.cpp
+index 23706f4d..52b730bf 100644
+--- a/src/sdk/moho/agent/AgentBridge.cpp
++++ b/src/sdk/moho/agent/AgentBridge.cpp
+@@ -1,4 +1,5 @@
+ #include "moho/agent/AgentBridge.h"
++#include "moho/agent/AgentInternal.h"
+ 
+ #include <winsock2.h>
+ #include <ws2tcpip.h>
+@@ -365,6 +366,12 @@ namespace moho
+           return;
+         case LUA_TTABLE:
+           break;
++        case LUA_TLIGHTUSERDATA:
++          // pre-built JSON from AgentBridge_ObserveUnits (AgentObserve.cpp)
++          if (!agent::AppendRawJsonToken(L, index, out)) {
++            out += "null";
++          }
++          return;
+         default:
+           out += "null";
+           return;
+@@ -770,6 +777,7 @@ namespace moho
+     {
+       RegisterGlobalFunction(L, "AgentBridge_LoadChunk", &AgentLoadChunk);
+       RegisterGlobalFunction(L, "AgentBridge_Lap", &AgentLap);
++      agent::RegisterObserveFunctions(L);
+ 
+       std::ifstream file(path, std::ios::binary);
+       if (!file) {
+@@ -1191,6 +1199,24 @@ namespace moho
+     }
+   } // namespace
+ 
++  namespace agent
++  {
++    void AppendJsonString(std::string& out, const char* const text, const std::size_t length)
++    {
++      moho::AppendJsonString(out, text, length);
++    }
++
++    void AppendJsonNumber(std::string& out, const double value)
++    {
++      moho::AppendJsonNumber(out, value);
++    }
++
++    void EncodeLuaValue(lua_State* const L, const int index, std::string& out, const int depth)
++    {
++      moho::EncodeLuaValue(L, index, out, depth);
++    }
++  } // namespace agent
++
+   namespace
+   {
+     // Diagnostics (engine addition): with /netdiag, dump the client manager's beat bookkeeping (queued,
+diff --git a/src/sdk/moho/agent/AgentInternal.h b/src/sdk/moho/agent/AgentInternal.h
+new file mode 100644
+index 00000000..c227f9eb
+--- /dev/null
++++ b/src/sdk/moho/agent/AgentInternal.h
+@@ -0,0 +1,36 @@
++#pragma once
++
++#include <cstddef>
++#include <string>
++
++struct lua_State;
++
++// Engine addition (agent bridge): helpers shared by AgentBridge.cpp and AgentObserve.cpp. Not part of
++// the recovered engine.
++namespace moho::agent
++{
++  /** JSON string literal of `text` (escaped) appended to `out`. */
++  void AppendJsonString(std::string& out, const char* text, std::size_t length);
++
++  /**
++   * JSON number appended to `out`, formatted like the bridge formats Lua numbers: integers exactly,
++   * anything else as the shortest float that round-trips (sim numbers are single precision); NaN and
++   * infinities become null.
++   */
++  void AppendJsonNumber(std::string& out, double value);
++
++  /** The Lua value at `index` as JSON (tables: 1..n arrays or string-keyed objects). */
++  void EncodeLuaValue(lua_State* L, int index, std::string& out, int depth);
++
++  /**
++   * AgentObserve.cpp: registers `AgentBridge_ObserveUnits` in the sim Lua state `L` (a native build of
++   * the observation's unit list; see AgentObserve.cpp) and forgets per-session caches of an earlier state.
++   */
++  void RegisterObserveFunctions(lua_State* L);
++
++  /**
++   * If the value at `index` is the token `AgentBridge_ObserveUnits` returns, appends the JSON it stands
++   * for and returns true (the encoder splices pre-built JSON in place of a Lua table).
++   */
++  bool AppendRawJsonToken(lua_State* L, int index, std::string& out);
++} // namespace moho::agent
+diff --git a/src/sdk/moho/agent/AgentObserve.cpp b/src/sdk/moho/agent/AgentObserve.cpp
+new file mode 100644
+index 00000000..ed23958f
+--- /dev/null
++++ b/src/sdk/moho/agent/AgentObserve.cpp
+@@ -0,0 +1,825 @@
++// Engine addition (agent bridge), not recovered from the binary: a native build of the unit list of an
++// agent observation.
++//
++// The bridge script (/agentscript) builds each observation in sim Lua. Its unit list -- every own unit
++// with its full state, and the enemy units the army sees, has on radar or remembers -- is most of that
++// work: a dozen engine calls per unit through the Lua binding layer, one Lua table per unit, and then
++// the JSON encoder walking all of those tables again. `AgentBridge_ObserveUnits(ctx)` produces the same
++// list directly as JSON, reading the same engine state the Lua bindings read, and returns a token
++// (light userdata) that the bridge's JSON encoder replaces with that text. The units themselves still
++// come from `brain:GetListOfUnits` called through Lua (FAF overrides it), the per-blueprint facts from
++// the script's own functions, so only the per-unit work moved. The script keeps its Lua version as the
++// fallback and reference; both must produce the same observation, byte for byte (faf-neural-ai
++// tools/perf_game.py --native check).
++//
++// ctx (a Lua table the script keeps between calls):
++//   me          army index whose point of view counts (intel, ghosts)
++//   brains      ArmyBrains
++//   modes       [army index] -> 1 own units (DescribeOwnUnit), 2 known units (DescribeVisibleUnit),
++//               3 intel (seen / radar / ghost, as the script's IntelOn), nil = skip the army
++//   summary     [army index] -> true: also sum the privileged summary's unit part for the army
++//   ghosts      include remembered enemy structures
++//   cats        { ALLUNITS, STRUCTURE, ENGINEER, FACTORY, TRANSPORTATION } category sets
++//   buildable   function(unit) -> list of blueprint ids the unit's blueprint may build, or nil
++//   toggles     function(unit) -> list of toggle bits (0..8) the unit has, or nil
++//   kind        function(unit) -> the script's UnitKind table for the unit's blueprint
++// The three functions are asked once per blueprint (toggles: until a unit of it is complete, as the
++// script caches them) and the answers are kept for the session.
++//
++// Returns token, summaries ({[army index] = {armyMass=..., ...}} for the armies with `summary`), or nil
++// and an error message.
++
++#include "moho/agent/AgentInternal.h"
++
++#include <cstdint>
++#include <cstring>
++#include <exception>
++#include <string>
++#include <unordered_map>
++#include <utility>
++#include <vector>
++
++#include "gpg/core/containers/String.h"
++#include "legacy/math/X87Math.h"
++#include "lua/LuaObject.h"
++#include "moho/ai/CAiReconDBImpl.h"
++#include "moho/ai/CAiSiloBuildImpl.h"
++#include "moho/ai/IAiReconDB.h"
++#include "moho/ai/IAiTransport.h"
++#include "moho/entity/Entity.h"
++#include "moho/entity/EntityCategoryReflection.h"
++#include "moho/lua/CScrLuaInitForm.h"
++#include "moho/resource/RResId.h"
++#include "moho/resource/blueprints/RUnitBlueprint.h"
++#include "moho/script/CScriptEvent.h"
++#include "moho/sim/CArmyImpl.h"
++#include "moho/sim/ReconBlip.h"
++#include "moho/sim/RRuleGameRules.h"
++#include "moho/sim/Sim.h"
++#include "moho/unit/CUnitCommand.h"
++#include "moho/unit/CUnitCommandQueue.h"
++#include "moho/unit/core/Unit.h"
++#include "moho/unit/core/UnitAttributes.h"
++
++namespace moho::agent
++{
++  namespace
++  {
++    int gRawJsonTag = 0; // its address is the token
++
++    constexpr int kToggleBitCount = 9; // RULEUTC_ShieldToggle (bit 0) .. RULEUTC_CloakToggle (bit 8)
++
++    struct UnitKind
++    {
++      float mass = 0.0f;
++      bool command = false;
++      bool engineer = false;
++      bool structure = false;
++      bool factory = false;
++      bool mex = false;
++      bool combat = false;
++    };
++
++    struct BuildOption
++    {
++      std::string id;                          // as the script listed it
++      const RUnitBlueprint* blueprint = nullptr; // nullptr: unknown id (the script's CanBuild then fails)
++    };
++
++    // What the script says about one blueprint, asked once.
++    struct BlueprintFacts
++    {
++      bool kindKnown = false;
++      UnitKind kind;
++      bool buildKnown = false;
++      bool hasBuildList = false;
++      std::vector<BuildOption> buildList;
++      bool togglesKnown = false;
++      bool hasToggles = false;
++      std::vector<int> toggleBits;
++    };
++
++    struct ObserveState
++    {
++      lua_State* luaState = nullptr; // the session the caches belong to
++      std::unordered_map<const REntityBlueprint*, BlueprintFacts> facts;
++      std::string json;              // the last unit list
++    };
++
++    ObserveState& State()
++    {
++      static ObserveState state;
++      return state;
++    }
++
++    // Stack slots of the per-call constants (see ObserveUnits).
++    struct Slots
++    {
++      int ctx;
++      int keyEntityId, keyArmy, keyUnitId, keyLayer, keyDead;
++      int buildable, toggles, kind;
++      int enhancements; // SimUnitEnhancements or nil
++    };
++
++    // Truthiness as Lua sees it.
++    bool Truthy(lua_State* const L, const int index)
++    {
++      return lua_toboolean(L, index) != 0;
++    }
++
++    // Pushes obj[key] with metamethods, as `obj.key` in the script.
++    void PushField(lua_State* const L, const int objIndex, const int keySlot)
++    {
++      lua_pushvalue(L, keySlot);
++      lua_gettable(L, objIndex);
++    }
++
++    bool RawFieldIsTrue(lua_State* const L, const int tableIndex, const char* const key)
++    {
++      lua_pushstring(L, key);
++      lua_rawget(L, tableIndex);
++      const bool value = Truthy(L, -1);
++      lua_settop(L, -2);
++      return value;
++    }
++
++    // Calls the function at `fnSlot` with the unit object at `unitIndex`; leaves one result (nil when the
++    // call failed: the rebuild's lua_call is protected and leaves the error object).
++    void CallWithUnit(lua_State* const L, const int fnSlot, const int unitIndex)
++    {
++      const int top = lua_gettop(L);
++      lua_pushvalue(L, fnSlot);
++      lua_pushvalue(L, unitIndex);
++      if (LuaCallProtected(L, 1, 1) != 0) { // upstream's lua_call is the unprotected call
++        lua_settop(L, top);
++        lua_pushnil(L);
++      }
++    }
++
++    bool Contains(const EntityCategorySet* const set, const Entity* const entity)
++    {
++      return set != nullptr && entity->BluePrint != nullptr && set->Bits().Contains(entity->BluePrint->mCategoryBitIndex);
++    }
++
++    // ---- JSON writing
++
++    class JsonObject
++    {
++    public:
++      explicit JsonObject(std::string& out) : mOut(out) { mOut.push_back('{'); }
++      ~JsonObject() { mOut.push_back('}'); }
++
++      std::string& Key(const char* const key)
++      {
++        if (!mFirst) {
++          mOut.push_back(',');
++        }
++        mFirst = false;
++        mOut.push_back('"');
++        mOut += key;
++        mOut += "\":";
++        return mOut;
++      }
++
++      // Lua numbers are single precision: round like lua_pushnumber would, then format like the encoder.
++      void Number(const char* const key, const double value) { AppendJsonNumber(Key(key), static_cast<float>(value)); }
++      void Bool(const char* const key, const bool value) { Key(key) += value ? "true" : "false"; }
++      void LuaValue(const char* const key, lua_State* const L, const int index) { EncodeLuaValue(L, index, Key(key), 1); }
++
++    private:
++      std::string& mOut;
++      bool mFirst = true;
++    };
++
++    // ---- per-blueprint facts from the script
++
++    BlueprintFacts& FactsOf(const Unit* const unit)
++    {
++      return State().facts[unit->BluePrint];
++    }
++
++    const UnitKind& KindOf(lua_State* const L, const Slots& s, const Unit* const unit, const int unitIndex)
++    {
++      BlueprintFacts& facts = FactsOf(unit);
++      if (!facts.kindKnown) {
++        facts.kindKnown = true;
++        const int top = lua_gettop(L);
++        CallWithUnit(L, s.kind, unitIndex);
++        const int k = lua_gettop(L);
++        if (lua_type(L, k) == LUA_TTABLE) {
++          lua_pushstring(L, "mass");
++          lua_rawget(L, k);
++          facts.kind.mass = lua_type(L, -1) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(L, -1)) : 0.0f;
++          lua_settop(L, k);
++          facts.kind.command = RawFieldIsTrue(L, k, "command");
++          facts.kind.engineer = RawFieldIsTrue(L, k, "engineer");
++          facts.kind.structure = RawFieldIsTrue(L, k, "structure");
++          facts.kind.factory = RawFieldIsTrue(L, k, "factory");
++          facts.kind.mex = RawFieldIsTrue(L, k, "mex");
++          facts.kind.combat = RawFieldIsTrue(L, k, "combat");
++        }
++        lua_settop(L, top);
++      }
++      return facts.kind;
++    }
++
++    const BlueprintFacts& BuildListOf(lua_State* const L, const Slots& s, const Unit* const unit, const int unitIndex)
++    {
++      BlueprintFacts& facts = FactsOf(unit);
++      if (!facts.buildKnown) {
++        facts.buildKnown = true;
++        const int top = lua_gettop(L);
++        CallWithUnit(L, s.buildable, unitIndex);
++        const int list = lua_gettop(L);
++        if (Truthy(L, list)) {
++          facts.hasBuildList = true;
++          RRuleGameRules* const rules = unit->SimulationRef != nullptr ? unit->SimulationRef->mRules : nullptr;
++          if (lua_type(L, list) == LUA_TTABLE) {
++            for (int i = 1;; ++i) {
++              lua_rawgeti(L, list, i);
++              if (lua_type(L, -1) == LUA_TNIL) {
++                break;
++              }
++              BuildOption option;
++              if (lua_type(L, -1) == LUA_TSTRING) {
++                option.id.assign(lua_tostring(L, -1), lua_strlen(L, -1));
++                if (rules != nullptr) {
++                  // as Unit:CanBuild resolves its argument
++                  RResId blueprintId{};
++                  gpg::STR_InitFilename(&blueprintId.name, option.id.c_str());
++                  option.blueprint = rules->GetUnitBlueprint(blueprintId);
++                }
++              } else {
++                option.id.clear(); // not a string: Unit:CanBuild raises, the script's Try answers false
++              }
++              facts.buildList.push_back(std::move(option));
++              lua_settop(L, list);
++            }
++          }
++        }
++        lua_settop(L, top);
++      }
++      return facts;
++    }
++
++    // The script's UnitToggles(unit): cached per blueprint once a unit of it is complete.
++    const BlueprintFacts& TogglesOf(lua_State* const L, const Slots& s, const Unit* const unit, const int unitIndex)
++    {
++      BlueprintFacts& facts = FactsOf(unit);
++      if (facts.togglesKnown) {
++        return facts;
++      }
++      const int top = lua_gettop(L);
++      CallWithUnit(L, s.toggles, unitIndex);
++      const int list = lua_gettop(L);
++      facts.hasToggles = Truthy(L, list);
++      facts.toggleBits.clear();
++      if (lua_type(L, list) == LUA_TTABLE) {
++        for (int i = 1;; ++i) {
++          lua_rawgeti(L, list, i);
++          if (lua_type(L, -1) != LUA_TNUMBER) {
++            break;
++          }
++          facts.toggleBits.push_back(static_cast<int>(lua_tonumber(L, -1)));
++          lua_settop(L, list);
++        }
++      }
++      lua_settop(L, top);
++      if (unit->mVarDat.mFractionComplete >= 1.0f) {
++        facts.togglesKnown = true;
++      }
++      return facts;
++    }
++
++    // ---- unit descriptions (the script's DescribeVisibleUnit / DescribeOwnUnit / radar / ghost)
++
++    void BaseFields(JsonObject& d, lua_State* const L, const Slots& s, const int unitIndex, const Wm3::Vec3f& pos)
++    {
++      PushField(L, unitIndex, s.keyEntityId);
++      if (lua_type(L, -1) != LUA_TNIL) {
++        d.LuaValue("id", L, -1);
++      }
++      lua_settop(L, -2);
++      PushField(L, unitIndex, s.keyArmy);
++      if (lua_type(L, -1) != LUA_TNIL) {
++        d.LuaValue("army", L, -1);
++      }
++      lua_settop(L, -2);
++      d.Number("x", pos.x);
++      d.Number("y", pos.y);
++      d.Number("z", pos.z);
++    }
++
++    void BlueprintId(JsonObject& d, lua_State* const L, const Slots& s, const int unitIndex)
++    {
++      PushField(L, unitIndex, s.keyUnitId);
++      if (lua_type(L, -1) != LUA_TNIL) {
++        d.LuaValue("bp", L, -1);
++      }
++      lua_settop(L, -2);
++    }
++
++    void VisibleFields(JsonObject& d, lua_State* const L, const Slots& s, const Unit* const unit, const int unitIndex)
++    {
++      const SSTIEntityVariableData& var = unit->mVarDat;
++      BaseFields(d, L, s, unitIndex, unit->GetTransformWm3().pos_);
++      BlueprintId(d, L, s, unitIndex);
++      d.Number("hp", var.mHealth);
++      d.Number("maxhp", var.mMaxHealth);
++      d.Number("frac", var.mFractionComplete);
++
++      // unit.Layer or unit:GetCurrentLayer()
++      PushField(L, unitIndex, s.keyLayer);
++      if (Truthy(L, -1)) {
++        d.LuaValue("layer", L, -1);
++      } else {
++        const ELayer layer = var.mLayerMask;
++        const char* const name = (static_cast<std::uint32_t>(layer) <= static_cast<std::uint32_t>(LAYER_Orbit))
++          ? Entity::LayerToString(layer)
++          : "";
++        AppendJsonString(d.Key("layer"), name, std::strlen(name));
++      }
++      lua_settop(L, -2);
++
++      // Entity:GetHeading()
++      const Wm3::Quatf& orientation = var.mCurTransform.orient_;
++      const float numerator = 2.0f * ((orientation.w * orientation.y) + (orientation.x * orientation.z));
++      const float denominator = 1.0f - (2.0f * ((orientation.z * orientation.z) + (orientation.y * orientation.y)));
++      d.Number("heading", msvc8::atan2(static_cast<double>(numerator), static_cast<double>(denominator)));
++    }
++
++    void OwnFields(
++      JsonObject& d,
++      lua_State* const L,
++      const Slots& s,
++      Unit* const unit,
++      const int unitIndex,
++      const EntityCategorySet* const structureCat,
++      const EntityCategorySet* const engineerCat,
++      const EntityCategorySet* const factoryCat,
++      const EntityCategorySet* const transportCat
++    )
++    {
++      VisibleFields(d, L, s, unit, unitIndex);
++      d.Bool("idle", unit->IsIdleState());
++      d.Number("work", unit->mUnitVarDat.mWorkProgress);
++
++      // Unit:GetCommandQueue(): the live commands; the first is the current order
++      int queued = 0;
++      const CUnitCommand* first = nullptr;
++      if (const CUnitCommandQueue* const queue = unit->CommandQueue; queue != nullptr) {
++        for (const WeakPtr<CUnitCommand>& weak : queue->mCommandVec) {
++          const CUnitCommand* const command = weak.GetObjectPtr();
++          if (command == nullptr) {
++            continue;
++          }
++          if (first == nullptr) {
++            first = command;
++          }
++          ++queued;
++        }
++      }
++      d.Number("queue", queued);
++      if (first != nullptr) {
++        d.Number("order", static_cast<std::int32_t>(first->mVarDat.mCmdType));
++        const float x = first->mVarDat.mTarget1.mPos.x;
++        const float z = first->mVarDat.mTarget1.mPos.z;
++        if (x != 0.0f || z != 0.0f) {
++          std::string& out = d.Key("dest");
++          out.push_back('[');
++          AppendJsonNumber(out, x);
++          out.push_back(',');
++          AppendJsonNumber(out, z);
++          out.push_back(']');
++        }
++      }
++
++      // focus: the unit it works on, by the focus unit's EntityId
++      if (Entity* const focusEntity = unit->GetFocusEntity(); focusEntity != nullptr) {
++        if (Unit* const focusUnit = focusEntity->IsUnit(); focusUnit != nullptr) {
++          focusUnit->mLuaObj.PushStack(L);
++          const int f = lua_gettop(L);
++          if (lua_type(L, f) == LUA_TTABLE || lua_type(L, f) == LUA_TUSERDATA) {
++            PushField(L, f, s.keyEntityId);
++            if (Truthy(L, -1)) {
++              d.LuaValue("focus", L, -1);
++            }
++          }
++          lua_settop(L, f - 1);
++        }
++      }
++      if (unit->mUnitVarDat.mIsPaused) {
++        d.Bool("paused", true);
++      }
++      // (no "shield": the script asks Unit:GetShieldRatio with one argument, the binding requires two, and
++      // its Try() falls back to 0 -- kept as the script behaves)
++
++      if (Contains(structureCat, unit)) {
++        const UnitAttributes& attributes = static_cast<const Unit*>(unit)->GetAttributes();
++        if (attributes.productionPerSecondMass > 0.0f) {
++          d.Number("pm", attributes.productionPerSecondMass);
++        }
++        if (attributes.productionPerSecondEnergy > 0.0f) {
++          d.Number("pe", attributes.productionPerSecondEnergy);
++        }
++        if (attributes.consumptionPerSecondEnergy > 0.0f) {
++          d.Number("ce", attributes.consumptionPerSecondEnergy);
++        }
++      }
++
++      if ((Contains(engineerCat, unit) || Contains(factoryCat, unit)) && unit->mVarDat.mFractionComplete >= 1.0f) {
++        const BlueprintFacts& facts = BuildListOf(L, s, unit, unitIndex);
++        if (facts.hasBuildList) {
++          std::string& out = d.Key("can_build");
++          out.push_back('[');
++          bool firstId = true;
++          for (const BuildOption& option : facts.buildList) {
++            if (option.blueprint != nullptr && unit->CanBuild(option.blueprint)) {
++              if (!firstId) {
++                out.push_back(',');
++              }
++              firstId = false;
++              AppendJsonString(out, option.id.data(), option.id.size());
++            }
++          }
++          out.push_back(']');
++        }
++      }
++
++      // SimUnitEnhancements[unit.EntityId]: the installed enhancements
++      if (lua_type(L, s.enhancements) == LUA_TTABLE) {
++        PushField(L, unitIndex, s.keyEntityId);
++        lua_gettable(L, s.enhancements);
++        const int e = lua_gettop(L);
++        if (lua_type(L, e) == LUA_TTABLE) {
++          std::string names;
++          int count = 0;
++          lua_pushnil(L);
++          while (lua_next(L, e) != 0) {
++            if (count > 0) {
++              names.push_back(',');
++            }
++            EncodeLuaValue(L, -1, names, 2);
++            ++count;
++            lua_settop(L, -2);
++          }
++          if (count > 0) {
++            std::string& out = d.Key("enh");
++            out.push_back('[');
++            out += names;
++            out.push_back(']');
++          }
++        }
++        lua_settop(L, e - 1);
++      }
++
++      if (CAiSiloBuildImpl* const silo = unit->AiSiloBuild; silo != nullptr) {
++        const float tactical = static_cast<float>(silo->SiloGetStorageCount(SILOTYPE_Tactical));
++        if (tactical > 0.0f) {
++          d.Number("tml", tactical);
++        }
++        const float nukes = static_cast<float>(silo->SiloGetStorageCount(SILOTYPE_Nuke));
++        if (nukes > 0.0f) {
++          d.Number("nukes", nukes);
++        }
++      }
++      if (Contains(transportCat, unit)) {
++        int cargo = 0;
++        if (IAiTransport* const transport = unit->AiTransport; transport != nullptr) {
++          const EntitySetTemplate<Unit> loaded = transport->TransportGetLoadedUnits(false);
++          cargo = static_cast<int>(loaded.Size());
++        }
++        d.Number("cargo", cargo);
++      }
++      const float fire = static_cast<float>(unit->mUnitVarDat.mFireState);
++      if (fire != 0.0f) {
++        d.Number("fire", fire);
++      }
++
++      const BlueprintFacts& toggles = TogglesOf(L, s, unit, unitIndex);
++      if (toggles.hasToggles) {
++        std::string& out = d.Key("toggles");
++        out.push_back('[');
++        std::string on;
++        for (std::size_t i = 0; i < toggles.toggleBits.size(); ++i) {
++          const int bit = toggles.toggleBits[i];
++          if (i > 0) {
++            out.push_back(',');
++          }
++          AppendJsonNumber(out, bit);
++          // Unit:GetScriptBit(name): the toggle's script bit is its capability bit
++          if (bit >= 0 && bit < kToggleBitCount && (unit->mUnitVarDat.mScriptbits & (1u << bit)) != 0u) {
++            if (!on.empty()) {
++              on.push_back(',');
++            }
++            AppendJsonNumber(on, bit);
++          }
++        }
++        out.push_back(']');
++        if (!on.empty()) {
++          std::string& onOut = d.Key("toggles_on");
++          onOut.push_back('[');
++          onOut += on;
++          onOut.push_back(']');
++        }
++      }
++    }
++
++    // The privileged summary's unit part for one army (the script's PrivilegedSummary loop).
++    struct Summary
++    {
++      float armyMass = 0.0f, structureMass = 0.0f, engineerMass = 0.0f;
++      float combat = 0.0f, engineers = 0.0f, factories = 0.0f, mexes = 0.0f, structures = 0.0f;
++      float commanderHealth = 0.0f;
++
++      void Add(const UnitKind& kind, const Unit* const unit)
++      {
++        const SSTIEntityVariableData& var = unit->mVarDat;
++        const float value = kind.mass * var.mFractionComplete;
++        if (kind.command) {
++          commanderHealth = var.mHealth / (var.mMaxHealth > 1.0f ? var.mMaxHealth : 1.0f);
++        } else if (kind.engineer) {
++          engineers = engineers + 1.0f;
++          engineerMass = engineerMass + value;
++        } else if (kind.combat) {
++          combat = combat + 1.0f;
++          armyMass = armyMass + value;
++        } else if (kind.structure) {
++          structures = structures + 1.0f;
++          structureMass = structureMass + value;
++          if (kind.factory) {
++            factories = factories + 1.0f;
++          }
++          if (kind.mex) {
++            mexes = mexes + 1.0f;
++          }
++        }
++      }
++
++      void Push(lua_State* const L) const
++      {
++        lua_newtable(L);
++        const auto set = [L](const char* const key, const float value) {
++          lua_pushstring(L, key);
++          lua_pushnumber(L, value);
++          lua_rawset(L, -3);
++        };
++        set("armyMass", armyMass);
++        set("structureMass", structureMass);
++        set("engineerMass", engineerMass);
++        set("combat", combat);
++        set("engineers", engineers);
++        set("factories", factories);
++        set("mexes", mexes);
++        set("structures", structures);
++        set("commanderHealth", commanderHealth);
++      }
++    };
++
++    EntityCategorySet* CategoryField(lua_State* const L, const int catsIndex, const char* const name)
++    {
++      lua_pushstring(L, name);
++      lua_rawget(L, catsIndex);
++      EntityCategorySet* set = nullptr;
++      if (lua_type(L, -1) != LUA_TNIL) {
++        const LuaPlus::LuaObject object(LuaPlus::LuaStackObject(SCR_ResolveBindingState(L), lua_gettop(L)));
++        set = func_GetCObj_EntityCategory(object);
++      }
++      lua_settop(L, -2);
++      return set;
++    }
++
++    int PushFailure(lua_State* const L, const int base, const char* const message)
++    {
++      lua_settop(L, base);
++      lua_pushnil(L);
++      lua_pushstring(L, message);
++      return 2;
++    }
++
++    int ObserveUnits(lua_State* const L)
++    {
++      ObserveState& state = State();
++      if (state.luaState != L) {
++        state.luaState = L;
++        state.facts.clear();
++      }
++      if (lua_type(L, 1) != LUA_TTABLE) {
++        return PushFailure(L, lua_gettop(L), "AgentBridge_ObserveUnits: expected a context table");
++      }
++      LuaPlus::LuaState* const luaState = SCR_ResolveBindingState(L);
++      lua_settop(L, 1);
++      const int base = 1;
++      if (lua_checkstack(L, 40) == 0) {
++        return PushFailure(L, base, "AgentBridge_ObserveUnits: Lua stack exhausted");
++      }
++
++      Slots s{};
++      s.ctx = 1;
++      const auto pushKey = [L](const char* const key) {
++        lua_pushstring(L, key);
++        return lua_gettop(L);
++      };
++      s.keyEntityId = pushKey("EntityId");
++      s.keyArmy = pushKey("Army");
++      s.keyUnitId = pushKey("UnitId");
++      s.keyLayer = pushKey("Layer");
++      s.keyDead = pushKey("Dead");
++      const auto pushCtx = [L](const char* const key) {
++        lua_pushstring(L, key);
++        lua_rawget(L, 1);
++        return lua_gettop(L);
++      };
++      s.buildable = pushCtx("buildable");
++      s.toggles = pushCtx("toggles");
++      s.kind = pushCtx("kind");
++      const int brains = pushCtx("brains");
++      const int modes = pushCtx("modes");
++      const int summaries = pushCtx("summary");
++      const int cats = pushCtx("cats");
++      const int meSlot = pushCtx("me");
++      const bool ghosts = Truthy(L, pushCtx("ghosts"));
++      lua_pushstring(L, "SimUnitEnhancements");
++      lua_rawget(L, LUA_GLOBALSINDEX);
++      s.enhancements = lua_gettop(L);
++      if (lua_type(L, brains) != LUA_TTABLE || lua_type(L, modes) != LUA_TTABLE || lua_type(L, cats) != LUA_TTABLE ||
++          lua_type(L, meSlot) != LUA_TNUMBER) {
++        return PushFailure(L, base, "AgentBridge_ObserveUnits: ctx needs brains, modes, cats and me");
++      }
++
++      lua_pushstring(L, "ALLUNITS");
++      lua_rawget(L, cats);
++      const int allUnitsSlot = lua_gettop(L);
++      EntityCategorySet* const structureCat = CategoryField(L, cats, "STRUCTURE");
++      EntityCategorySet* const engineerCat = CategoryField(L, cats, "ENGINEER");
++      EntityCategorySet* const factoryCat = CategoryField(L, cats, "FACTORY");
++      EntityCategorySet* const transportCat = CategoryField(L, cats, "TRANSPORTATION");
++
++      // the observing army (unit:GetBlip(me), blip:IsSeenNow(me), ...)
++      const LuaPlus::LuaObject meObject(LuaPlus::LuaStackObject(luaState, meSlot));
++      CArmyImpl* const meArmy = ARMY_FromLuaState(luaState, meObject);
++      CAiReconDBImpl* const meRecon = meArmy != nullptr ? meArmy->GetReconDB() : nullptr;
++      const std::int32_t meArmyIndex = meArmy != nullptr ? meArmy->mConstDat.mArmyIndex : -1;
++
++      std::string& out = state.json;
++      out.clear();
++      out.push_back('[');
++      bool firstUnit = true;
++      const auto beginUnit = [&out, &firstUnit]() -> std::string& {
++        if (!firstUnit) {
++          out.push_back(',');
++        }
++        firstUnit = false;
++        return out;
++      };
++
++      lua_newtable(L);
++      const int summaryOut = lua_gettop(L);
++      const int loopBase = summaryOut;
++
++      for (int armyIndex = 1;; ++armyIndex) {
++        lua_settop(L, loopBase);
++        lua_rawgeti(L, brains, armyIndex);
++        const int brainSlot = lua_gettop(L);
++        if (lua_type(L, brainSlot) == LUA_TNIL) {
++          break; // ipairs(ArmyBrains)
++        }
++        lua_rawgeti(L, modes, armyIndex);
++        const int mode = lua_type(L, -1) == LUA_TNUMBER ? static_cast<int>(lua_tonumber(L, -1)) : 0;
++        bool wantSummary = false;
++        if (lua_type(L, summaries) == LUA_TTABLE) {
++          lua_rawgeti(L, summaries, armyIndex);
++          wantSummary = Truthy(L, -1);
++        }
++        lua_settop(L, brainSlot);
++        if (mode == 0 && !wantSummary) {
++          continue;
++        }
++
++        // brain:GetListOfUnits(categories.ALLUNITS, false) -- through Lua, as the script calls it: FAF's
++        // AIBrain overrides it (drops DUMMYUNIT, keeps units still being built), and the list's order and
++        // membership are then the script's exactly.
++        lua_pushstring(L, "GetListOfUnits");
++        lua_gettable(L, brainSlot);
++        lua_pushvalue(L, brainSlot);
++        lua_pushvalue(L, allUnitsSlot);
++        lua_pushboolean(L, 0);
++        if (LuaCallProtected(L, 3, 1) != 0 || lua_type(L, -1) != LUA_TTABLE) {
++          lua_settop(L, brainSlot);
++          lua_newtable(L); // `or {}`
++        }
++        const int listSlot = lua_gettop(L);
++
++        Summary summary;
++        for (int listIndex = 1;; ++listIndex) {
++          lua_settop(L, listSlot);
++          lua_rawgeti(L, listSlot, listIndex);
++          const int unitIndex = lua_gettop(L);
++          if (lua_type(L, unitIndex) == LUA_TNIL) {
++            break; // ipairs
++          }
++          // IsLive(unit): unit and not unit.Dead and not unit:BeenDestroyed()
++          if (!Truthy(L, unitIndex)) {
++            continue;
++          }
++          PushField(L, unitIndex, s.keyDead);
++          const bool dead = Truthy(L, -1);
++          lua_settop(L, unitIndex);
++          if (dead) {
++            continue;
++          }
++          Entity* const entity = SCR_FromLuaNoError_Entity(LuaPlus::LuaObject(LuaPlus::LuaStackObject(luaState, unitIndex)));
++          if (entity == nullptr || entity->DestroyQueuedFlag != 0u) {
++            continue;
++          }
++          Unit* const unit = entity->IsUnit();
++          if (unit == nullptr) {
++            continue; // not something the script's unit methods accept (they would raise)
++          }
++
++          if (mode == 1) {
++            beginUnit();
++            JsonObject d(out);
++            OwnFields(d, L, s, unit, unitIndex, structureCat, engineerCat, factoryCat, transportCat);
++          } else if (mode == 2) {
++            beginUnit();
++            JsonObject d(out);
++            VisibleFields(d, L, s, unit, unitIndex);
++          } else if (mode == 3 && meRecon != nullptr) {
++            ReconBlip* const blip = meRecon->ReconGetBlip(unit);
++            if (blip != nullptr) {
++              const std::uint32_t flags = blip->mReconDat[static_cast<std::size_t>(meArmyIndex)].mReconFlags;
++              if ((flags & RECON_LOSNow) != 0u) {
++                beginUnit();
++                JsonObject d(out);
++                VisibleFields(d, L, s, unit, unitIndex);
++              } else if ((flags & (RECON_Radar | RECON_Sonar | RECON_Omni)) != 0u) {
++                // a radar contact: a (possibly jammed) position and nothing about the unit
++                beginUnit();
++                JsonObject d(out);
++                BaseFields(d, L, s, unitIndex, blip->GetTransformWm3().pos_);
++                d.Bool("radar", true);
++              } else if (ghosts && KindOf(L, s, unit, unitIndex).structure && (flags & RECON_LOSEver) != 0u) {
++                // a structure seen before: its type and place, as a player remembers it
++                beginUnit();
++                JsonObject d(out);
++                BaseFields(d, L, s, unitIndex, blip->GetTransformWm3().pos_);
++                BlueprintId(d, L, s, unitIndex);
++                d.Bool("ghost", true);
++              }
++            }
++          }
++
++          if (wantSummary) {
++            summary.Add(KindOf(L, s, unit, unitIndex), unit);
++          }
++        }
++
++        if (wantSummary) {
++          lua_settop(L, brainSlot);
++          summary.Push(L);
++          lua_rawseti(L, summaryOut, armyIndex);
++        }
++      }
++      out.push_back(']');
++
++      lua_settop(L, summaryOut);
++      lua_pushlightuserdata(L, &gRawJsonTag);
++      lua_insert(L, summaryOut);
++      return 2;
++    }
++
++    int ObserveUnitsGuarded(lua_State* const L)
++    {
++      const int base = lua_gettop(L);
++      try {
++        return ObserveUnits(L);
++      } catch (const std::exception& exception) {
++        State().json = "[]";
++        return PushFailure(L, base, exception.what());
++      } catch (...) {
++        State().json = "[]";
++        return PushFailure(L, base, "AgentBridge_ObserveUnits: unknown exception");
++      }
++    }
++  } // namespace
++
++  void RegisterObserveFunctions(lua_State* const L)
++  {
++    ObserveState& state = State();
++    state.luaState = L;
++    state.facts.clear();
++    lua_pushstring(L, "AgentBridge_ObserveUnits");
++    lua_pushcclosure(L, &ObserveUnitsGuarded, 0);
++    lua_rawset(L, LUA_GLOBALSINDEX);
++  }
++
++  bool AppendRawJsonToken(lua_State* const L, const int index, std::string& out)
++  {
++    if (lua_touserdata(L, index) != &gRawJsonTag) {
++      return false;
++    }
++    out += State().json;
++    return true;
++  }
++} // namespace moho::agent
+-- 
+2.55.0.windows.3
+

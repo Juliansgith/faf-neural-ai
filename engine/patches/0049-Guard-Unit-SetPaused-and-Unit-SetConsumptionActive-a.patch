@@ -1,0 +1,50 @@
+From 449124ca75ab36341ef71df27221f7c516810b21 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 7 Oct 2026 02:31:52 +0200
+Subject: [PATCH 49/52] Guard Unit:SetPaused and Unit:SetConsumptionActive
+ against a stale unit wrapper
+
+A Lua unit wrapper can outlive its native unit; GetUnitOptional returns null
+for that wrapper and both bindings dereferenced it (a crash seen once through
+the agent bridge, _enginetest/bin_run2/crash_callstack.txt, 2026-10-03). The
+call is ignored for a destroyed unit. Other bindings in Unit.cpp
+(GetCommandQueue, GetCurrentMoveLocation) raise a Lua error instead; what
+the shipped exe does here is still unchecked.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+(cherry picked from commit f9cc75a15a34a30ea9da30484c0918348006766c)
+---
+ src/sdk/moho/unit/core/Unit.cpp | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/src/sdk/moho/unit/core/Unit.cpp b/src/sdk/moho/unit/core/Unit.cpp
+index 6286c65b..102d56c6 100644
+--- a/src/sdk/moho/unit/core/Unit.cpp
++++ b/src/sdk/moho/unit/core/Unit.cpp
+@@ -5575,7 +5575,11 @@ int moho::cfunc_UnitSetPausedL(LuaPlus::LuaState* const state)
+ 
+   const LuaPlus::LuaStackObject pausedArg(state, 2);
+   const bool paused = pausedArg.GetBoolean();
+-  unit->SetPaused(paused);
++  // A Lua unit wrapper can survive destruction of its native payload.
++  // GetUnitOptional deliberately returns null for that stale wrapper.
++  if (unit != nullptr) {
++    unit->SetPaused(paused);
++  }
+ 
+   return 0;
+ }
+@@ -5629,7 +5633,9 @@ int moho::cfunc_UnitSetConsumptionActiveL(LuaPlus::LuaState* const state)
+ 
+   const LuaPlus::LuaStackObject activeArg(state, 2);
+   const bool isActive = activeArg.GetBoolean();
+-  unit->SetConsumptionActive(isActive);
++  if (unit != nullptr) {
++    unit->SetConsumptionActive(isActive);
++  }
+ 
+   return 1;
+ }
+-- 
+2.55.0.windows.3
+

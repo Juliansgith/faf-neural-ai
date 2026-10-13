@@ -1,0 +1,81 @@
+From d4b16758338719d320cfd2c516d79a5ca53f92ea Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 23:10:53 +0200
+Subject: [PATCH 24/52] Gate the guard-scan radius on the head command's type,
+ as FAF's patch does
+
+Unit::UpdateBlipsInRange (0x006ACC60) takes the blueprint's
+GuardScanRadius only when FAF's GuardFix hook (0x006ACC95 -> 0x0128F426)
+lets it through:
+
+  mov edi,[edx+10h]   ; CommandQueue->mCommandVec begin
+  mov edi,[edi]       ; the head WeakPtr's owner-link slot = command + 4
+  mov edi,[edi+94h]   ; command + 0x98 = mVarDat.mCmdType
+  and edi,30h         ; patrol / attack-move (bits 4-5)
+
+The rebuild applied the +0x94 to the command object itself, which lands
+on the second inline slot of mVarDat.mEntIds. Nothing writes that slot
+for a single-unit command, so the radius came from whatever the heap
+block held before: a read of uninitialised memory. It made the sim
+non-deterministic -- two runs of the same game, with the same agent
+orders, diverged after 5-30 minutes, first in a commander's steering --
+and gave units on move/guard/build orders the guard-scan radius at
+random, where FAF's exe gives it to patrol and attack-move orders.
+
+Found by filling new heap blocks with 0x00 in one run and 0xFF in the
+other: the runs split at beat 5606 of a seed-7 skirmish; bisecting the
+filled allocation sizes gave 376 bytes (CUnitCommand) and bisecting the
+filled bytes gave offset 0x94.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit e2facf713f46ec80daa591e0647fc063f60640d1)
+(cherry picked from commit 72702e511b5117ef66f72ee4e22b7cb5704fee25)
+---
+ src/sdk/moho/unit/core/Unit.cpp | 28 +++++++++++++++++-----------
+ 1 file changed, 17 insertions(+), 11 deletions(-)
+
+diff --git a/src/sdk/moho/unit/core/Unit.cpp b/src/sdk/moho/unit/core/Unit.cpp
+index 80591efa..bde96d57 100644
+--- a/src/sdk/moho/unit/core/Unit.cpp
++++ b/src/sdk/moho/unit/core/Unit.cpp
+@@ -14784,20 +14784,26 @@ void Unit::UpdateBlipsInRange()
+   const RUnitBlueprint* const blueprint = GetBlueprint();
+   CAiAttackerImpl* const attacker = AiAttacker;
+ 
+-  // Guard-scan radius: zero unless the head command passes FAF's patched gate.
++  // Guard-scan radius: zero unless the head command passes FAF's patched gate
++  // (FA-Binary-Patches GuardFix, "zeroing GuardScanRadius if the unit's order is
++  // not Patrol/AttackMove"; the hook at 0x006ACC95 jumps to 0x0128F426):
+   //
+-  // That gate (0x0128C956, inside the `// patched` block the decompiler marks in
+-  // FUN_006ACC60) is `mov edi,[edi+94h] / and edi,30h`. `CUnitCommand::mVarDat`
+-  // is constructed at `+0x80` (0x006E82E8 `lea ecx,[ebp+80h]`) and the ent-id
+-  // list's inline window is `+0x10..+0x17`, so `+0x94` is the list's SECOND
+-  // inline slot -- not a flag word. Retail's own variable-data constructor never
+-  // writes it, so this reads whatever the last published ent-id pair left there.
+-  // Kept at the same lane rather than reinterpreted as a command-type test:
+-  // `mCmdType` is at `+0x98`, and masking it with 0x30 would not select
+-  // Guard (0x0F) anyway.
++  //   mov edx,[ebx+4B4h]   ; CommandQueue
++  //   mov edi,[edx+10h]    ; mCommandVec begin (== end -> zero)
++  //   mov edi,[edi]        ; the head WeakPtr's owner-link slot = command + 4
++  //   mov edi,[edi+94h]    ; command + 0x98 = mVarDat.mCmdType
++  //   and edi,30h          ; Patrol 0x10, AggressiveMove 0x23, ... (bits 4-5)
++  //
++  // The `+0x94` is relative to the weak pointer's owner-link slot, which sits one
++  // pointer into the command (WeakPtrOwnerLinkOffset<CUnitCommand> == 4), not to
++  // the command itself. Read from the command object, +0x94 was the second inline
++  // slot of `mVarDat.mEntIds` -- never written for a single-unit command -- so the
++  // radius depended on whatever the heap block held before: a read of
++  // uninitialised memory that made the sim diverge between two runs of the same
++  // game (seen as one army's commander steering differently).
+   float scanRadius = 0.0f;
+   CUnitCommand* const headCommand = CommandQueue->GetCurrentCommand();
+-  if (headCommand != nullptr && (headCommand->mVarDat.mEntIds.InlineStorage()[1] & 0x30) != 0) {
++  if (headCommand != nullptr && (static_cast<std::uint32_t>(headCommand->mVarDat.mCmdType) & 0x30u) != 0u) {
+     scanRadius = blueprint->AI.GuardScanRadius;
+   }
+ 
+-- 
+2.55.0.windows.3
+

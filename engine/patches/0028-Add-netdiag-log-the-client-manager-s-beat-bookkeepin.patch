@@ -1,0 +1,76 @@
+From 2366e121d2acd143e81471539f83944b53684df4 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 16:34:31 +0200
+Subject: [PATCH 28/52] Add /netdiag: log the client manager's beat bookkeeping
+ every 5 s
+
+With /netdiag on the command line, a background thread calls the active
+sim driver's CClientManagerImpl::Debug() every five seconds: each
+client's queued/dispatched beats and latest acks, and the manager's
+available/fully-queued/partially-queued beats. Used to find why replay
+playback stopped dispatching beats (the local client's ack slot was
+never advanced). Inert without the switch.
+
+(cherry picked from commit 4e10dc3662e9b7dd237a0b89d86ff3dcf5b213f1)
+
+Ported onto 8977bb9d: SIM_GetActiveDriver is WLD_GetDriver (CWldSession.h) upstream.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+(cherry picked from commit 06e94d3e0d36014d33f2e5999ad6834d3065dcc4)
+---
+ src/sdk/moho/agent/AgentBridge.cpp | 30 ++++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/src/sdk/moho/agent/AgentBridge.cpp b/src/sdk/moho/agent/AgentBridge.cpp
+index 36359ce8..83ff9efb 100644
+--- a/src/sdk/moho/agent/AgentBridge.cpp
++++ b/src/sdk/moho/agent/AgentBridge.cpp
+@@ -23,7 +23,10 @@
+ #include "legacy/containers/Vector.h"
+ #include "lua/LuaObject.h"
+ #include "moho/misc/StartupHelpers.h"
++#include "moho/net/CClientManagerImpl.h"
++#include "moho/sim/CWldSession.h"
+ #include "moho/sim/Sim.h"
++#include "moho/sim/SimDriver.h"
+ #include "platform/X87Precision.h"
+ 
+ // Engine addition, not recovered from the binary. See AgentBridge.h for the protocol.
+@@ -1055,6 +1058,33 @@ namespace moho
+     }
+   } // namespace
+ 
++  namespace
++  {
++    // Diagnostics (engine addition): with /netdiag, dump the client manager's beat bookkeeping (queued,
++    // dispatched and available beats per client, readiness) to the log every five seconds -- for
++    // finding out why a session (e.g. a replay) stops dispatching beats.
++    struct NetDiagnosticsStarter
++    {
++      NetDiagnosticsStarter()
++      {
++        if (!CFG_GetArgOption("/netdiag", 0, nullptr)) {
++          return;
++        }
++        std::thread([] {
++          for (;;) {
++            ::Sleep(5000);
++            if (ISTIDriver* const driver = WLD_GetDriver(); driver != nullptr) {
++              if (CClientManagerImpl* const clientManager = driver->GetClientManager(); clientManager != nullptr) {
++                clientManager->Debug();
++              }
++            }
++          }
++        }).detach();
++      }
++    };
++    const NetDiagnosticsStarter gNetDiagnosticsStarter{};
++  } // namespace
++
+   void AGENT_OnSimBeatStart()
+   {
+     if (Config().enabled) {
+-- 
+2.55.0.windows.3
+

@@ -1,7 +1,7 @@
-From ff295da061295a860c27f9ad96ff3487b41de360 Mon Sep 17 00:00:00 2001
+From 3ebff850a088c92e3a02de0e567200cae826d53c Mon Sep 17 00:00:00 2001
 From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
 Date: Tue, 29 Sep 2026 15:12:38 +0200
-Subject: [PATCH 01/56] Build with /EHs so Lua errors can unwind through the VM
+Subject: [PATCH 01/52] Build with /EHs so Lua errors can unwind through the VM
 
 The recovered Lua VM (lua/LuaObject.cpp) raises script errors as C++
 exceptions (lua_RuntimeError from luaG_errormsg) out of functions declared
@@ -13,15 +13,16 @@ the process. Debug builds happened to keep the handlers. /EHs
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 (cherry picked from commit 4e33524e9e2eb74d6b32011539d171042d351143)
+(cherry picked from commit ff295da061295a860c27f9ad96ff3487b41de360)
 ---
  src/sdk/main.vcxproj | 20 ++++++++++++++++++++
  1 file changed, 20 insertions(+)
 
 diff --git a/src/sdk/main.vcxproj b/src/sdk/main.vcxproj
-index 61ce605a..a78ac37d 100644
+index ee5f9068..26b80169 100644
 --- a/src/sdk/main.vcxproj
 +++ b/src/sdk/main.vcxproj
-@@ -162,6 +162,11 @@
+@@ -183,6 +183,11 @@
        <ConformanceMode>true</ConformanceMode>
        <LanguageStandard>stdcpp20</LanguageStandard>
        <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -32,8 +33,8 @@ index 61ce605a..a78ac37d 100644
 +      <ExceptionHandling>SyncCThrow</ExceptionHandling>
        <AdditionalOptions>/MP4 /FS %(AdditionalOptions)</AdditionalOptions>
        <DisableSpecificWarnings>4073;4244;4273;4834;4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
-       <AdditionalIncludeDirectories>$(FafRepoRoot)src\sdk;$(FafRepoRoot)dependencies\LuaPlus_Build1081\Src\LuaPlus\include;$(FafRepoRoot)dependencies\boost_1_34_1;$(FafRepoRoot)dependencies\zlib-1.2.3\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\mswu;$(Wm3IncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-@@ -209,6 +214,11 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+       <AdditionalIncludeDirectories>$(FafFfmpegRoot)\include;$(FafRepoRoot)src\sdk;$(FafRepoRoot)dependencies\LuaPlus_Build1081\Src\LuaPlus\include;$(FafRepoRoot)dependencies\boost_1_34_1;$(FafRepoRoot)dependencies\zlib-1.2.3\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\mswu;$(Wm3IncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+@@ -230,6 +235,11 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
        <ConformanceMode>true</ConformanceMode>
        <LanguageStandard>stdcpp20</LanguageStandard>
        <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -44,8 +45,8 @@ index 61ce605a..a78ac37d 100644
 +      <ExceptionHandling>SyncCThrow</ExceptionHandling>
        <AdditionalOptions>/MP4 /FS %(AdditionalOptions)</AdditionalOptions>
        <DisableSpecificWarnings>4073;4244;4273;4834;4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
-       <AdditionalIncludeDirectories>$(FafRepoRoot)src\sdk;$(FafRepoRoot)dependencies\LuaPlus_Build1081\Src\LuaPlus\include;$(FafRepoRoot)dependencies\boost_1_34_1;$(FafRepoRoot)dependencies\zlib-1.2.3\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\mswu;$(Wm3IncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-@@ -268,6 +278,11 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+       <AdditionalIncludeDirectories>$(FafFfmpegRoot)\include;$(FafRepoRoot)src\sdk;$(FafRepoRoot)dependencies\LuaPlus_Build1081\Src\LuaPlus\include;$(FafRepoRoot)dependencies\boost_1_34_1;$(FafRepoRoot)dependencies\zlib-1.2.3\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\mswu;$(Wm3IncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+@@ -290,6 +300,11 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
        <ConformanceMode>true</ConformanceMode>
        <LanguageStandard>stdcpp20</LanguageStandard>
        <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -56,8 +57,8 @@ index 61ce605a..a78ac37d 100644
 +      <ExceptionHandling>SyncCThrow</ExceptionHandling>
        <AdditionalOptions>/MP4 /FS %(AdditionalOptions)</AdditionalOptions>
        <DisableSpecificWarnings>4073;4244;4273;4834;4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
-       <AdditionalIncludeDirectories>$(FafRepoRoot)src\sdk;$(FafRepoRoot)dependencies\LuaPlus_Build1081\Src\LuaPlus\include;$(FafRepoRoot)dependencies\boost_1_34_1;$(FafRepoRoot)dependencies\zlib-1.2.3\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\mswu;$(Wm3IncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-@@ -300,6 +315,11 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+       <AdditionalIncludeDirectories>$(FafFfmpegRoot)\include;$(FafRepoRoot)src\sdk;$(FafRepoRoot)dependencies\LuaPlus_Build1081\Src\LuaPlus\include;$(FafRepoRoot)dependencies\boost_1_34_1;$(FafRepoRoot)dependencies\zlib-1.2.3\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\mswu;$(Wm3IncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+@@ -322,6 +337,11 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
        <ConformanceMode>true</ConformanceMode>
        <LanguageStandard>stdcpp20</LanguageStandard>
        <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -68,7 +69,7 @@ index 61ce605a..a78ac37d 100644
 +      <ExceptionHandling>SyncCThrow</ExceptionHandling>
        <AdditionalOptions>/MP4 /FS %(AdditionalOptions)</AdditionalOptions>
        <DisableSpecificWarnings>4073;4244;4273;4834;4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
-       <AdditionalIncludeDirectories>$(FafRepoRoot)src\sdk;$(FafRepoRoot)dependencies\LuaPlus_Build1081\Src\LuaPlus\include;$(FafRepoRoot)dependencies\boost_1_34_1;$(FafRepoRoot)dependencies\zlib-1.2.3\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\mswu;$(Wm3IncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+       <AdditionalIncludeDirectories>$(FafFfmpegRoot)\include;$(FafRepoRoot)src\sdk;$(FafRepoRoot)dependencies\LuaPlus_Build1081\Src\LuaPlus\include;$(FafRepoRoot)dependencies\boost_1_34_1;$(FafRepoRoot)dependencies\zlib-1.2.3\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\include;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\mswu;$(Wm3IncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
 -- 
 2.55.0.windows.3
 

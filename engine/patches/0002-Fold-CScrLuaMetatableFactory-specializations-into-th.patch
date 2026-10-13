@@ -1,7 +1,7 @@
-From fadafb1cd2afe2c9b506f7ef0c61e4085ebbd880 Mon Sep 17 00:00:00 2001
+From 88723104bb0d0080f14e2f2e1e5e393b26dbe56b Mon Sep 17 00:00:00 2001
 From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
 Date: Tue, 29 Sep 2026 15:12:39 +0200
-Subject: [PATCH 02/56] Fold CScrLuaMetatableFactory specializations into the
+Subject: [PATCH 02/52] Fold CScrLuaMetatableFactory specializations into the
  primary template
 
 45 translation units declared their own explicit specialization of
@@ -24,6 +24,7 @@ Ported onto 8977bb9d: kept upstream's new CLuaConOutputHandler::GetPointerType/s
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+(cherry picked from commit fadafb1cd2afe2c9b506f7ef0c61e4085ebbd880)
 ---
  src/sdk/moho/ai/CAiNavigatorImpl.cpp          |  16 +-
  src/sdk/moho/ai/CAiNavigatorImpl.h            |  22 +-
@@ -79,10 +80,10 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
  51 files changed, 215 insertions(+), 1300 deletions(-)
 
 diff --git a/src/sdk/moho/ai/CAiNavigatorImpl.cpp b/src/sdk/moho/ai/CAiNavigatorImpl.cpp
-index 2bdb0d9d..f39e253e 100644
+index 3e27a7d5..f70263c9 100644
 --- a/src/sdk/moho/ai/CAiNavigatorImpl.cpp
 +++ b/src/sdk/moho/ai/CAiNavigatorImpl.cpp
-@@ -265,7 +265,7 @@ namespace
+@@ -266,7 +266,7 @@ namespace
  } // namespace
  
  gpg::RType* CAiNavigatorImpl::sType = nullptr;
@@ -91,7 +92,7 @@ index 2bdb0d9d..f39e253e 100644
  
  /**
   * Address: 0x005A58E0 (FUN_005A58E0, cfunc_CAiNavigatorImplSetGoalL)
-@@ -1245,22 +1245,14 @@ namespace
+@@ -1248,22 +1248,14 @@ namespace
  /**
   * Address: 0x1001FDE0 (MohoEngine.dll constructor shape)
   */
@@ -118,7 +119,7 @@ index 2bdb0d9d..f39e253e 100644
  /**
   * Address: 0x005A3550 (FUN_005A3550, default ctor)
 diff --git a/src/sdk/moho/ai/CAiNavigatorImpl.h b/src/sdk/moho/ai/CAiNavigatorImpl.h
-index 86b9e0cb..e772a9f4 100644
+index 2640a41d..39447999 100644
 --- a/src/sdk/moho/ai/CAiNavigatorImpl.h
 +++ b/src/sdk/moho/ai/CAiNavigatorImpl.h
 @@ -172,27 +172,7 @@ namespace moho
@@ -151,10 +152,10 @@ index 86b9e0cb..e772a9f4 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<CAiNavigatorImpl>) == 0x08,
 diff --git a/src/sdk/moho/ai/CAiPersonality.cpp b/src/sdk/moho/ai/CAiPersonality.cpp
-index ae0af0da..ceacff1d 100644
+index 41dafb1b..123dc193 100644
 --- a/src/sdk/moho/ai/CAiPersonality.cpp
 +++ b/src/sdk/moho/ai/CAiPersonality.cpp
-@@ -330,7 +330,7 @@ namespace
+@@ -331,7 +331,7 @@ namespace
  } // namespace
  
  gpg::RType* CAiPersonality::sType = nullptr;
@@ -163,7 +164,7 @@ index ae0af0da..ceacff1d 100644
  
  /**
   * Address: 0x005BA9F0 (FUN_005BA9F0, cfunc_CAiPersonalityAdjustDelayL)
-@@ -1802,10 +1802,7 @@ int moho::register_CScrLuaMetatableFactory_CAiPersonality_Index()
+@@ -1803,10 +1803,7 @@ int moho::register_CScrLuaMetatableFactory_CAiPersonality_Index()
    return index;
  }
  
@@ -175,7 +176,7 @@ index ae0af0da..ceacff1d 100644
  
  namespace
  {
-@@ -1824,10 +1821,7 @@ namespace
+@@ -1825,10 +1822,7 @@ namespace
  /**
   * Address: 0x005B9620 (FUN_005B9620, ?Create@?$CScrLuaMetatableFactory@VCAiPersonality@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
   */
@@ -188,10 +189,10 @@ index ae0af0da..ceacff1d 100644
  /**
   * Address: 0x005B6B40 (FUN_005B6B40, default ctor body)
 diff --git a/src/sdk/moho/ai/CAiPersonality.h b/src/sdk/moho/ai/CAiPersonality.h
-index 047e8c8d..288dea36 100644
+index 9c4f6967..587de8d0 100644
 --- a/src/sdk/moho/ai/CAiPersonality.h
 +++ b/src/sdk/moho/ai/CAiPersonality.h
-@@ -174,22 +174,7 @@ namespace moho
+@@ -192,22 +192,7 @@ namespace moho
     * VFTABLE: 0x00E1CAB8
     * COL:  0x00E7298C
     */
@@ -216,10 +217,10 @@ index 047e8c8d..288dea36 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<CAiPersonality>) == 0x08,
 diff --git a/src/sdk/moho/ai/CAimManipulator.cpp b/src/sdk/moho/ai/CAimManipulator.cpp
-index 64111b23..b8ee66a4 100644
+index bb5ef378..6ad6f1bd 100644
 --- a/src/sdk/moho/ai/CAimManipulator.cpp
 +++ b/src/sdk/moho/ai/CAimManipulator.cpp
-@@ -43,8 +43,7 @@ namespace moho
+@@ -44,8 +44,7 @@ namespace moho
  
  bool moho::dbg_Ballistics = false;
  gpg::RType* moho::CAimManipulator::sType = nullptr;
@@ -229,7 +230,7 @@ index 64111b23..b8ee66a4 100644
  
  namespace
  {
-@@ -1132,15 +1131,9 @@ Wm3::Vector3f* moho::CAimManipulator::Aim(Wm3::Vector3f* const outDirection, CAi
+@@ -1133,15 +1132,9 @@ Wm3::Vector3f* moho::CAimManipulator::Aim(Wm3::Vector3f* const outDirection, CAi
    return outDirection;
  }
  
@@ -247,7 +248,7 @@ index 64111b23..b8ee66a4 100644
  
  /**
   * Address: 0x00632C40 (FUN_00632C40)
-@@ -1150,10 +1143,7 @@ moho::CScrLuaMetatableFactory<moho::CAimManipulator>::Instance()
+@@ -1151,10 +1144,7 @@ moho::CScrLuaMetatableFactory<moho::CAimManipulator>::Instance()
   * Creates the `CAimManipulator` Lua metatable through
   * `SCR_CreateSimpleMetatable`.
   */
@@ -260,7 +261,7 @@ index 64111b23..b8ee66a4 100644
  /**
   * Address: 0x00632140 (FUN_00632140, cfunc_CAimManipulatorSetFiringArc)
 diff --git a/src/sdk/moho/ai/CAimManipulator.h b/src/sdk/moho/ai/CAimManipulator.h
-index 146d7ad0..fc45975e 100644
+index 47a58692..ca37158b 100644
 --- a/src/sdk/moho/ai/CAimManipulator.h
 +++ b/src/sdk/moho/ai/CAimManipulator.h
 @@ -444,27 +444,7 @@ namespace moho
@@ -293,10 +294,10 @@ index 146d7ad0..fc45975e 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<CAimManipulator>) == 0x08,
 diff --git a/src/sdk/moho/animation/CAnimationManipulator.cpp b/src/sdk/moho/animation/CAnimationManipulator.cpp
-index f25fc999..30a6caab 100644
+index cabf9025..615cb7a6 100644
 --- a/src/sdk/moho/animation/CAnimationManipulator.cpp
 +++ b/src/sdk/moho/animation/CAnimationManipulator.cpp
-@@ -515,7 +515,7 @@ namespace moho
+@@ -396,7 +396,7 @@ namespace moho
    int cfunc_CAnimationManipulatorPlayAnimL(LuaPlus::LuaState* state);
  
    gpg::RType* CAnimationManipulator::sType = nullptr;
@@ -305,7 +306,7 @@ index f25fc999..30a6caab 100644
  
    /**
     * Address: 0x10015880 (constructor shape)
-@@ -523,14 +523,9 @@ namespace moho
+@@ -404,14 +404,9 @@ namespace moho
     * What it does:
     * Stores one metatable-factory index used by `CScrLuaObjectFactory::Get`.
     */
@@ -322,7 +323,7 @@ index f25fc999..30a6caab 100644
  
    /**
     * Address: 0x00641E10 (FUN_00641E10, ?Create@?$CScrLuaMetatableFactory@VCAnimationManipulator@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
-@@ -538,10 +533,7 @@ namespace moho
+@@ -419,10 +414,7 @@ namespace moho
     * What it does:
     * Creates the default metatable used by `CAnimationManipulator` Lua userdata.
     */
@@ -335,10 +336,10 @@ index f25fc999..30a6caab 100644
    /**
     * Address: 0x006404B0 (FUN_006404B0, cfunc_CreateAnimator)
 diff --git a/src/sdk/moho/animation/CAnimationManipulator.h b/src/sdk/moho/animation/CAnimationManipulator.h
-index 76f26607..a9007586 100644
+index 0e5f8cfb..5e4f77dc 100644
 --- a/src/sdk/moho/animation/CAnimationManipulator.h
 +++ b/src/sdk/moho/animation/CAnimationManipulator.h
-@@ -179,25 +179,7 @@ namespace moho
+@@ -211,25 +211,7 @@ namespace moho
     * VFTABLE: 0x00E21770
     * COL: 0x00E7AD54
     */
@@ -366,7 +367,7 @@ index 76f26607..a9007586 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<CAnimationManipulator>) == 0x8,
 diff --git a/src/sdk/moho/animation/CSlaveManipulator.cpp b/src/sdk/moho/animation/CSlaveManipulator.cpp
-index 08e90a8a..140425c6 100644
+index 4439891a..35c9b983 100644
 --- a/src/sdk/moho/animation/CSlaveManipulator.cpp
 +++ b/src/sdk/moho/animation/CSlaveManipulator.cpp
 @@ -250,7 +250,7 @@ namespace
@@ -440,7 +441,7 @@ index e52057af..d356252e 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<CSlaveManipulator>) == 0x8,
 diff --git a/src/sdk/moho/animation/CSlideManipulator.cpp b/src/sdk/moho/animation/CSlideManipulator.cpp
-index 4f383218..f43ebfc6 100644
+index 28548273..f0726a08 100644
 --- a/src/sdk/moho/animation/CSlideManipulator.cpp
 +++ b/src/sdk/moho/animation/CSlideManipulator.cpp
 @@ -393,7 +393,7 @@ namespace
@@ -514,7 +515,7 @@ index 93980959..603acfa3 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<CSlideManipulator>) == 0x8,
 diff --git a/src/sdk/moho/audio/HSound.cpp b/src/sdk/moho/audio/HSound.cpp
-index 5d14bae9..95b8506a 100644
+index a6d953c4..fb7beefa 100644
 --- a/src/sdk/moho/audio/HSound.cpp
 +++ b/src/sdk/moho/audio/HSound.cpp
 @@ -12,7 +12,7 @@ namespace moho
@@ -626,7 +627,7 @@ index 979fa0e0..c5c1f208 100644
    /**
     * Address: 0x006379A0 (FUN_006379A0, scalar deleting destructor thunk)
 diff --git a/src/sdk/moho/collision/CCollisionManipulator.h b/src/sdk/moho/collision/CCollisionManipulator.h
-index fe6a3817..c4247d19 100644
+index ac4cf9fe..a8326d00 100644
 --- a/src/sdk/moho/collision/CCollisionManipulator.h
 +++ b/src/sdk/moho/collision/CCollisionManipulator.h
 @@ -195,22 +195,7 @@ namespace moho
@@ -755,10 +756,10 @@ index a1b488c4..edb2f994 100644
  
  namespace
 diff --git a/src/sdk/moho/entity/MotorFallDown.cpp b/src/sdk/moho/entity/MotorFallDown.cpp
-index e0fba110..d7e17124 100644
+index ecc77a2d..7ee85ebc 100644
 --- a/src/sdk/moho/entity/MotorFallDown.cpp
 +++ b/src/sdk/moho/entity/MotorFallDown.cpp
-@@ -341,20 +341,14 @@ namespace
+@@ -205,20 +205,14 @@ namespace
  namespace moho
  {
    gpg::RType* MotorFallDown::sType = nullptr;
@@ -783,10 +784,10 @@ index e0fba110..d7e17124 100644
    /**
     * Address: 0x00694CF0 (FUN_00694CF0, default ctor lane)
 diff --git a/src/sdk/moho/entity/MotorFallDown.h b/src/sdk/moho/entity/MotorFallDown.h
-index 46aebe21..0d06da28 100644
+index 29d81ece..589c0d4a 100644
 --- a/src/sdk/moho/entity/MotorFallDown.h
 +++ b/src/sdk/moho/entity/MotorFallDown.h
-@@ -82,22 +82,7 @@ namespace moho
+@@ -117,22 +117,7 @@ namespace moho
    static_assert(offsetof(MotorFallDown, mBreakOnWhack) == 0x44, "MotorFallDown::mBreakOnWhack offset must be 0x44");
    static_assert(sizeof(MotorFallDown) == 0x48, "MotorFallDown size must be 0x48");
  
@@ -811,10 +812,10 @@ index 46aebe21..0d06da28 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<MotorFallDown>) == 0x08,
 diff --git a/src/sdk/moho/entity/MotorSinkAway.cpp b/src/sdk/moho/entity/MotorSinkAway.cpp
-index e50e65ea..c894f13d 100644
+index 9064698a..e63464cf 100644
 --- a/src/sdk/moho/entity/MotorSinkAway.cpp
 +++ b/src/sdk/moho/entity/MotorSinkAway.cpp
-@@ -232,12 +232,9 @@ namespace
+@@ -197,12 +197,9 @@ namespace
  namespace moho
  {
    gpg::RType* MotorSinkAway::sType = nullptr;
@@ -829,7 +830,7 @@ index e50e65ea..c894f13d 100644
  
    /**
     * Address: 0x006971D0 (FUN_006971D0)
-@@ -256,10 +253,7 @@ namespace moho
+@@ -221,10 +218,7 @@ namespace moho
    /**
     * Address: 0x00696FD0 (FUN_00696FD0, Moho::CScrLuaMetatableFactory<Moho::MotorSinkAway>::Create)
     */
@@ -842,10 +843,10 @@ index e50e65ea..c894f13d 100644
    /**
     * Address: 0x00696500 (FUN_00696500, default ctor)
 diff --git a/src/sdk/moho/entity/MotorSinkAway.h b/src/sdk/moho/entity/MotorSinkAway.h
-index 4caa5132..0224d754 100644
+index 87fde851..52fa4231 100644
 --- a/src/sdk/moho/entity/MotorSinkAway.h
 +++ b/src/sdk/moho/entity/MotorSinkAway.h
-@@ -86,22 +86,7 @@ namespace moho
+@@ -104,22 +104,7 @@ namespace moho
    static_assert(offsetof(MotorSinkAway, mSinkDeltaY) == 0x38, "MotorSinkAway::mSinkDeltaY offset must be 0x38");
    static_assert(sizeof(MotorSinkAway) == 0x3C, "MotorSinkAway size must be 0x3C");
  
@@ -870,10 +871,10 @@ index 4caa5132..0224d754 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<MotorSinkAway>) == 0x08,
 diff --git a/src/sdk/moho/entity/Prop.cpp b/src/sdk/moho/entity/Prop.cpp
-index bfddc9a0..7986fa66 100644
+index b5533eae..ce8be57e 100644
 --- a/src/sdk/moho/entity/Prop.cpp
 +++ b/src/sdk/moho/entity/Prop.cpp
-@@ -101,7 +101,7 @@ namespace moho
+@@ -102,7 +102,7 @@ namespace moho
  {
    gpg::RType* SPropPriorityInfo::sType = nullptr;
    gpg::RType* Prop::sType = nullptr;
@@ -882,7 +883,7 @@ index bfddc9a0..7986fa66 100644
    int cfunc_PropAddBoundedProp(lua_State* luaContext);
    int cfunc_PropAddBoundedPropL(LuaPlus::LuaState* state);
    int cfunc_SplitProp(lua_State* luaContext);
-@@ -112,18 +112,12 @@ namespace moho
+@@ -113,18 +113,12 @@ namespace moho
    int cfunc_CreatePropHPR(lua_State* luaContext);
    int cfunc_CreatePropHPRL(LuaPlus::LuaState* state);
  
@@ -904,10 +905,10 @@ index bfddc9a0..7986fa66 100644
    /**
     * Address: 0x0067F140 (FUN_0067F140, func_GetPropFactory)
 diff --git a/src/sdk/moho/entity/Prop.h b/src/sdk/moho/entity/Prop.h
-index b762e014..b5efc28b 100644
+index e59e8cc9..c094c1de 100644
 --- a/src/sdk/moho/entity/Prop.h
 +++ b/src/sdk/moho/entity/Prop.h
-@@ -180,22 +180,7 @@ namespace moho
+@@ -210,22 +210,7 @@ namespace moho
    static_assert(offsetof(Prop, mHandleIndex) == 0x284, "Prop::mHandleIndex offset must be 0x284");
    static_assert(sizeof(Prop) == 0x288, "Prop size must be 0x288");
  
@@ -1011,10 +1012,10 @@ index 597046f6..15fd012b 100644
    /**
     * VFTABLE: 0x00E01750
 diff --git a/src/sdk/moho/lua/CScrLuaObjectFactory.cpp b/src/sdk/moho/lua/CScrLuaObjectFactory.cpp
-index cec8c703..e33cea57 100644
+index 2d9d4e99..0e80cbd1 100644
 --- a/src/sdk/moho/lua/CScrLuaObjectFactory.cpp
 +++ b/src/sdk/moho/lua/CScrLuaObjectFactory.cpp
-@@ -418,7 +418,7 @@ namespace
+@@ -415,7 +415,7 @@ namespace
  namespace moho
  {
    int32_t CScrLuaObjectFactory::sNumIds = 0;
@@ -1023,7 +1024,7 @@ index cec8c703..e33cea57 100644
  
    /**
     * Address: 0x00BC60D0 (FUN_00BC60D0)
-@@ -1380,24 +1380,16 @@ namespace moho
+@@ -1377,24 +1377,16 @@ namespace moho
      return value;
    }
  
@@ -1090,10 +1091,10 @@ index 62cefacb..f4709785 100644
      sizeof(CScrLuaMetatableFactory<CScriptObject*>) == 0x8, "CScrLuaMetatableFactory<CScriptObject*> must be 0x8"
    );
 diff --git a/src/sdk/moho/misc/CEconomyEvent.cpp b/src/sdk/moho/misc/CEconomyEvent.cpp
-index 0abaf939..e7eb59c2 100644
+index ec22d99b..d866cd76 100644
 --- a/src/sdk/moho/misc/CEconomyEvent.cpp
 +++ b/src/sdk/moho/misc/CEconomyEvent.cpp
-@@ -886,7 +886,7 @@ namespace moho
+@@ -458,7 +458,7 @@ namespace moho
    gpg::RType* CEconRequest::sType = nullptr;
    gpg::RType* CEconomyEvent::sType = nullptr;
    gpg::RType* CEconomyEvent::sPointerType = nullptr;
@@ -1102,7 +1103,7 @@ index 0abaf939..e7eb59c2 100644
  
    namespace
    {
-@@ -1222,22 +1222,14 @@ bool moho::CEconomyEvent::IsDone() const noexcept
+@@ -751,22 +751,14 @@ bool moho::CEconomyEvent::IsDone() const noexcept
  /**
    * Alias of FUN_1001FDE0 (non-canonical helper lane).
   */
@@ -1126,13 +1127,13 @@ index 0abaf939..e7eb59c2 100644
 -}
 +// CScrLuaMetatableFactory<CEconomyEvent> is the primary template: one definition in every translation unit.
  
- /**
-  * Address: 0x00BDD360 (FUN_00BDD360, dynamic initializer for the global
+ namespace
+ {
 diff --git a/src/sdk/moho/misc/CEconomyEvent.h b/src/sdk/moho/misc/CEconomyEvent.h
-index 09409598..b05728ed 100644
+index d9cbbd4b..4d812993 100644
 --- a/src/sdk/moho/misc/CEconomyEvent.h
 +++ b/src/sdk/moho/misc/CEconomyEvent.h
-@@ -201,27 +201,7 @@ namespace moho
+@@ -243,27 +243,7 @@ namespace moho
     * VFTABLE: 0x00E36FD4
     * COL:  0x00E90B08
     */
@@ -1160,9 +1161,9 @@ index 09409598..b05728ed 100644
 +  // CScrLuaMetatableFactory<CEconomyEvent> is the primary template: one definition in every translation unit.
  
    /**
-    * VFTABLE: 0x00E36FE4
+    * VFTABLE: 0x00E36FA4
 diff --git a/src/sdk/moho/net/CLobby.cpp b/src/sdk/moho/net/CLobby.cpp
-index 9c00c228..49a23ce0 100644
+index 1bba1afb..4a9a802b 100644
 --- a/src/sdk/moho/net/CLobby.cpp
 +++ b/src/sdk/moho/net/CLobby.cpp
 @@ -453,19 +453,11 @@ namespace
@@ -1213,10 +1214,10 @@ index de1e5adf..621e7739 100644
    static_assert(sizeof(CScrLuaMetatableFactory<CLobby>) == 0x08, "CScrLuaMetatableFactory<CLobby> size must be 0x08");
  
 diff --git a/src/sdk/moho/projectile/Projectile.h b/src/sdk/moho/projectile/Projectile.h
-index 414e32a7..7d8ba368 100644
+index 5e7ef5f7..a62529f1 100644
 --- a/src/sdk/moho/projectile/Projectile.h
 +++ b/src/sdk/moho/projectile/Projectile.h
-@@ -330,22 +330,7 @@ namespace moho
+@@ -332,22 +332,7 @@ namespace moho
      bool isChildProjectile
    );
  
@@ -1241,10 +1242,10 @@ index 414e32a7..7d8ba368 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<Projectile>) == 0x08,
 diff --git a/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp b/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
-index 9b83b29f..1005b5ce 100644
+index 09e00bd3..598e698e 100644
 --- a/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
 +++ b/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
-@@ -50,7 +50,7 @@ namespace moho
+@@ -51,7 +51,7 @@ namespace moho
    // has it; this file only registers them
    // (register_ManyToOne{Broadcaster,Listener}_EProjectileImpactEvent_TypeInfo,
    // 0x00BD64C0 and 0x00BD64E0).
@@ -1253,7 +1254,7 @@ index 9b83b29f..1005b5ce 100644
  } // namespace moho
  
  namespace
-@@ -602,15 +602,9 @@ namespace moho
+@@ -565,15 +565,9 @@ namespace moho
    /**
     * Address: 0x0067FFE0 (FUN_0067FFE0, Moho::CScrLuaMetatableFactory<Moho::Projectile>::Create)
     */
@@ -1327,10 +1328,10 @@ index 44cabd91..cd025194 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<CDecalHandle>) == 0x08,
 diff --git a/src/sdk/moho/render/camera/CameraImpl.cpp b/src/sdk/moho/render/camera/CameraImpl.cpp
-index ccde15d0..8fab9d27 100644
+index a81ea9ac..745b3269 100644
 --- a/src/sdk/moho/render/camera/CameraImpl.cpp
 +++ b/src/sdk/moho/render/camera/CameraImpl.cpp
-@@ -519,17 +519,11 @@ namespace
+@@ -389,17 +389,11 @@ namespace
  
  namespace moho
  {
@@ -1352,7 +1353,7 @@ index ccde15d0..8fab9d27 100644
    /**
     * Address: 0x007B0A90 (FUN_007B0A90, func_CreateLuaCameraImpl)
 diff --git a/src/sdk/moho/render/camera/CameraImpl.h b/src/sdk/moho/render/camera/CameraImpl.h
-index 7e7a6fba..6e06173b 100644
+index 963c92ff..583e796a 100644
 --- a/src/sdk/moho/render/camera/CameraImpl.h
 +++ b/src/sdk/moho/render/camera/CameraImpl.h
 @@ -1210,19 +1210,7 @@ namespace moho
@@ -1377,10 +1378,10 @@ index 7e7a6fba..6e06173b 100644
    static_assert(
      sizeof(CScrLuaMetatableFactory<CameraImpl>) == 0x08,
 diff --git a/src/sdk/moho/script/CUnitScriptTask.cpp b/src/sdk/moho/script/CUnitScriptTask.cpp
-index 6ab4cc52..8a9ab964 100644
+index b865b497..0225fb7d 100644
 --- a/src/sdk/moho/script/CUnitScriptTask.cpp
 +++ b/src/sdk/moho/script/CUnitScriptTask.cpp
-@@ -261,7 +261,7 @@ namespace
+@@ -262,7 +262,7 @@ namespace
  } // namespace
  
  gpg::RType* CUnitScriptTask::sType = nullptr;
@@ -1389,7 +1390,7 @@ index 6ab4cc52..8a9ab964 100644
  
  /**
    * Alias of FUN_10015880 (non-canonical helper lane).
-@@ -269,15 +269,9 @@ CScrLuaMetatableFactory<CUnitScriptTask> CScrLuaMetatableFactory<CUnitScriptTask
+@@ -270,15 +270,9 @@ CScrLuaMetatableFactory<CUnitScriptTask> CScrLuaMetatableFactory<CUnitScriptTask
   * What it does:
   * Stores one metatable-factory index used by `CScrLuaObjectFactory::Get`.
   */
@@ -1407,7 +1408,7 @@ index 6ab4cc52..8a9ab964 100644
  
  /**
   * Address: 0x006240F0 (FUN_006240F0)
-@@ -300,10 +294,7 @@ moho::startup_CScrLuaMetatableFactory_CUnitScriptTask_Index()
+@@ -301,10 +295,7 @@ moho::startup_CScrLuaMetatableFactory_CUnitScriptTask_Index()
   * What it does:
   * Creates the default metatable used by `CUnitScriptTask` Lua userdata.
   */
@@ -1420,7 +1421,7 @@ index 6ab4cc52..8a9ab964 100644
  /**
   * Address: 0x00622810 (FUN_00622810, default ctor)
 diff --git a/src/sdk/moho/script/CUnitScriptTask.h b/src/sdk/moho/script/CUnitScriptTask.h
-index ac7548f0..cb63f798 100644
+index 47b43f96..d9ebea08 100644
 --- a/src/sdk/moho/script/CUnitScriptTask.h
 +++ b/src/sdk/moho/script/CUnitScriptTask.h
 @@ -132,25 +132,7 @@ namespace moho
@@ -1503,10 +1504,10 @@ index 498b4195..6669d474 100644
  gpg::RType* ScriptedDecal::sType = nullptr;
  
 diff --git a/src/sdk/moho/serialization/CPrefetchSet.cpp b/src/sdk/moho/serialization/CPrefetchSet.cpp
-index 481d3514..e58e3347 100644
+index 36ab160e..b3ee6420 100644
 --- a/src/sdk/moho/serialization/CPrefetchSet.cpp
 +++ b/src/sdk/moho/serialization/CPrefetchSet.cpp
-@@ -114,7 +114,7 @@ namespace
+@@ -101,7 +101,7 @@ namespace
  namespace moho
  {
    gpg::RType* CPrefetchSet::sType = nullptr;
@@ -1515,7 +1516,7 @@ index 481d3514..e58e3347 100644
  
    gpg::RType* CPrefetchSet::StaticGetClass()
    {
-@@ -174,18 +174,12 @@ namespace moho
+@@ -159,18 +159,12 @@ namespace moho
      mHandles.clear();
    }
  
@@ -1537,10 +1538,10 @@ index 481d3514..e58e3347 100644
    /**
     * Address: 0x004A7D20 (FUN_004A7D20, func_CreatePrefetchSet)
 diff --git a/src/sdk/moho/serialization/CPrefetchSet.h b/src/sdk/moho/serialization/CPrefetchSet.h
-index a64a2230..901c79a4 100644
+index 483c51cd..e923651f 100644
 --- a/src/sdk/moho/serialization/CPrefetchSet.h
 +++ b/src/sdk/moho/serialization/CPrefetchSet.h
-@@ -42,21 +42,7 @@ namespace moho
+@@ -54,21 +54,7 @@ namespace moho
    static_assert(offsetof(CPrefetchSet, mHandles) == 0x00, "CPrefetchSet::mHandles offset must be 0x00");
    static_assert(sizeof(CPrefetchSet) == 0x10, "CPrefetchSet size must be 0x10");
  
@@ -1595,10 +1596,10 @@ index 08c47455..f11963e9 100644
    static_assert(sizeof(CScrLuaMetatableFactory<CDamage>) == 0x8, "CScrLuaMetatableFactory<CDamage> size must be 0x8");
  
 diff --git a/src/sdk/moho/sim/CDamageLuaFunctionRegistrations.cpp b/src/sdk/moho/sim/CDamageLuaFunctionRegistrations.cpp
-index ce1752b5..fc18fc14 100644
+index f36a7d00..6000f6c4 100644
 --- a/src/sdk/moho/sim/CDamageLuaFunctionRegistrations.cpp
 +++ b/src/sdk/moho/sim/CDamageLuaFunctionRegistrations.cpp
-@@ -68,7 +68,7 @@ namespace
+@@ -69,7 +69,7 @@ namespace
  
  namespace moho
  {
@@ -1607,7 +1608,7 @@ index ce1752b5..fc18fc14 100644
  
    /**
      * Alias of FUN_10015880 (non-canonical helper lane).
-@@ -76,14 +76,9 @@ namespace moho
+@@ -77,14 +77,9 @@ namespace moho
     * What it does:
     * Stores one metatable-factory index used by `CScrLuaObjectFactory::Get`.
     */
@@ -1624,7 +1625,7 @@ index ce1752b5..fc18fc14 100644
  
    /**
     * Address: 0x0073AA90 (FUN_0073AA90)
-@@ -105,10 +100,7 @@ namespace moho
+@@ -106,10 +101,7 @@ namespace moho
     * What it does:
     * Creates the default metatable used by `CDamage` Lua userdata.
     */
@@ -1637,7 +1638,7 @@ index ce1752b5..fc18fc14 100644
    /**
     * Address: 0x0073A810 (FUN_0073A810, func_CreateLuaCDamage)
 diff --git a/src/sdk/moho/sim/CPlatoon.cpp b/src/sdk/moho/sim/CPlatoon.cpp
-index 17d2f46d..45de31bb 100644
+index 6dfd9536..993ab162 100644
 --- a/src/sdk/moho/sim/CPlatoon.cpp
 +++ b/src/sdk/moho/sim/CPlatoon.cpp
 @@ -61,18 +61,7 @@
@@ -1660,7 +1661,7 @@ index 17d2f46d..45de31bb 100644
  
    static_assert(
      sizeof(CScrLuaMetatableFactory<CPlatoon>) == 0x08, "CScrLuaMetatableFactory<CPlatoon> size must be 0x08"
-@@ -892,7 +881,7 @@ namespace
+@@ -486,7 +475,7 @@ namespace
  
  namespace moho
  {
@@ -1669,7 +1670,7 @@ index 17d2f46d..45de31bb 100644
  
    int cfunc_CPlatoonGetPersonality(lua_State* luaContext);
    int cfunc_CPlatoonGetBrain(lua_State* luaContext);
-@@ -957,10 +946,7 @@ namespace moho
+@@ -551,10 +540,7 @@ namespace moho
    int cfunc_CPlatoonPlatoonCategoryCountAroundPositionL(LuaPlus::LuaState* state);
    int cfunc_CPlatoonPlatoonCategoryCountL(LuaPlus::LuaState* state);
  
@@ -1681,7 +1682,7 @@ index 17d2f46d..45de31bb 100644
  
    /**
     * Address: 0x0072AC30 (FUN_0072AC30)
-@@ -1035,10 +1021,7 @@ namespace moho
+@@ -629,10 +615,7 @@ namespace moho
      return &instance;
    }
  
@@ -1921,10 +1922,10 @@ index 53f107c4..e757f0ae 100644
    LuaPlus::LuaObject CreateRotateManipulatorLuaMetatable(LuaPlus::LuaState* const state)
    {
 diff --git a/src/sdk/moho/ui/UiRuntimeTypes.cpp b/src/sdk/moho/ui/UiRuntimeTypes.cpp
-index 155a5273..10a00479 100644
+index 5fc183a3..c7b69474 100644
 --- a/src/sdk/moho/ui/UiRuntimeTypes.cpp
 +++ b/src/sdk/moho/ui/UiRuntimeTypes.cpp
-@@ -177,288 +177,84 @@ namespace moho
+@@ -178,288 +178,84 @@ namespace moho
  
  namespace moho
  {
@@ -2536,10 +2537,10 @@ index 155a5273..10a00479 100644
  /**
   * Address: 0x00798BB0 (FUN_00798BB0, register_CScrLuaMetatableFactory_CMauiHistogram_Index)
 diff --git a/src/sdk/moho/unit/core/Unit.cpp b/src/sdk/moho/unit/core/Unit.cpp
-index 18c017ee..fef6390c 100644
+index 6fdfcd04..3685657a 100644
 --- a/src/sdk/moho/unit/core/Unit.cpp
 +++ b/src/sdk/moho/unit/core/Unit.cpp
-@@ -868,20 +868,7 @@ namespace moho
+@@ -872,20 +872,7 @@ namespace moho
     */
    int cfunc_UnitGetStatL(LuaPlus::LuaState* state);
  
@@ -2561,7 +2562,7 @@ index 18c017ee..fef6390c 100644
  
    static_assert(sizeof(CScrLuaMetatableFactory<Unit>) == 0x08, "CScrLuaMetatableFactory<Unit> size must be 0x08");
  } // namespace moho
-@@ -2315,21 +2302,13 @@ moho::Unit* moho::SCR_GetUnitOptional(const LuaPlus::LuaObject& unitObject)
+@@ -2277,21 +2264,13 @@ moho::Unit* moho::SCR_GetUnitOptional(const LuaPlus::LuaObject& unitObject)
    return static_cast<Unit*>(unitRef.mObj);
  }
  
@@ -2588,7 +2589,7 @@ index 18c017ee..fef6390c 100644
  /**
   * Address: 0x0067F080 (FUN_0067F080, func_GetUnitFactory)
 diff --git a/src/sdk/moho/unit/core/UserUnit.cpp b/src/sdk/moho/unit/core/UserUnit.cpp
-index c1a83f89..830a7f7d 100644
+index 21300e13..b703748e 100644
 --- a/src/sdk/moho/unit/core/UserUnit.cpp
 +++ b/src/sdk/moho/unit/core/UserUnit.cpp
 @@ -53,20 +53,7 @@ using namespace moho;
@@ -2613,7 +2614,7 @@ index c1a83f89..830a7f7d 100644
  
    static_assert(sizeof(CScrLuaMetatableFactory<UserUnit>) == 0x08, "CScrLuaMetatableFactory<UserUnit> size must be 0x08");
  } // namespace moho
-@@ -1562,16 +1549,11 @@ namespace
+@@ -1498,16 +1485,11 @@ namespace
    }
  } // namespace
  
@@ -2633,7 +2634,7 @@ index c1a83f89..830a7f7d 100644
  
  /**
   * Address: 0x008C63B0 (FUN_008C63B0)
-@@ -1908,10 +1890,7 @@ namespace moho
+@@ -1842,10 +1824,7 @@ namespace moho
   * What it does:
   * Builds the simple Lua metatable used for `UserUnit` userdata bindings.
   */

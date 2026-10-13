@@ -1,0 +1,65 @@
+From 93da8e2784b841e5b74f634f3a831eee2d5f95f6 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 17:56:56 +0200
+Subject: [PATCH 18/52] Range-filter CAiBrain:GetUnitsAroundPoint like the
+ binary
+
+func_GetUnitsAroundPoint (0x0057B290), which backs the brain's
+GetUnitsAroundPoint, gathers its candidates with func_EntitiesAroundPoint
+(0x0057B343 -> 0x00722350): the grid cells of the radius-sized square,
+then only the entities whose XZ distance to the point is inside the
+radius. The recovery gathered the square's cells without the distance
+test, so the call returned units well outside the radius (the counting
+twin, GetNumUnitsAroundPoint, already used EntitiesAroundPoint).
+
+Found by replaying an FAF recording: FAF's AI GridPresence counted a
+factory 8.5 units from a mass point as within 6 of it and drew 128
+random numbers the shipped engine did not.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 3b4c188faf26dfecd223eea9989ec913235e75de)
+(cherry picked from commit dd25febd21beb1b7af4cf87dd9fe10a3db5b44be)
+---
+ src/sdk/moho/ai/CAiBrain.cpp | 26 +++++++++-----------------
+ 1 file changed, 9 insertions(+), 17 deletions(-)
+
+diff --git a/src/sdk/moho/ai/CAiBrain.cpp b/src/sdk/moho/ai/CAiBrain.cpp
+index 22acd923..31ccc7c9 100644
+--- a/src/sdk/moho/ai/CAiBrain.cpp
++++ b/src/sdk/moho/ai/CAiBrain.cpp
+@@ -1588,23 +1588,15 @@ namespace moho
+ 
+     CAiReconDBImpl* const reconDb = brain->mArmy->GetReconDB();
+ 
+-    const gpg::Rect2f queryRect{
+-      position.x - dist,
+-      position.z - dist,
+-      position.x + dist,
+-      position.z + dist
+-    };
+-    CollisionDBRect collisionRect{};
+-    (void)func_Rect2fToInt16(&collisionRect, queryRect);
+-
+-    gpg::core::FastVectorN<Entity*, 20> gatheredEntities{};
+-    (void)brain->mSim->mOGrid->mEntityOccupationManager.GatherUnmarkedEntities(
+-      gatheredEntities,
+-      collisionRect,
+-      ENTITYTYPE_Unit
+-    );
+-
+-    for (Entity* const candidateEntity : gatheredEntities) {
++    // 0x0057B343: func_EntitiesAroundPoint, which range-filters the gathered cells on XZ
++    // distance. Gathering the grid cells of the +-dist square without that filter (as the
++    // recovery did) returned units well outside the radius -- e.g. FAF's GridPresence then
++    // counted a factory 8.5 units from a mass point as within 6 of it.
++    gpg::core::FastVectorN<CollisionResult, 10> gatheredHits{};
++    EntitiesAroundPoint(gatheredHits, dist, *brain->mSim->mOGrid, ENTITYTYPE_Unit, position);
++
++    for (const CollisionResult& hit : gatheredHits) {
++      Entity* const candidateEntity = hit.sourceEntity;
+       if (candidateEntity == nullptr || candidateEntity->mVarDat.mIsDead != 0u || candidateEntity->DestroyQueuedFlag != 0u) {
+         continue;
+       }
+-- 
+2.55.0.windows.3
+

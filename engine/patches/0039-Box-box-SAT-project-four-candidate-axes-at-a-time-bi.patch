@@ -1,0 +1,398 @@
+From b09f6bdd38ace7148c5b0f7f3b78a5bccb913079 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 22:33:49 +0200
+Subject: [PATCH 39/52] Box-box SAT: project four candidate axes at a time,
+ bit-identical
+
+ComputeBoxBoxContactManifold (0x00474830) projects both boxes onto fifteen
+candidate axes one at a time (ProjectBoxOntoAxis, 0x00475550: four dot
+products per box and axis), then normalises every axis with a sqrt and a
+divide to pick the one of least overlap. After the swept-path change this is
+what is left of the collision cost: the physics contacts
+(ProcessSurfaceCollisionFromLastMove -> CollectEntitiesInBox -> CollideBox),
+which do use the manifold.
+
+The axes now go through SSE four at a time (ComputeSatOverlaps). Every lane
+performs the scalar operations in the scalar order - dot products as
+(x*x' + y*y') + z*z', the radius as (|d2|*e2 + |d1|*e1) + |d0|*e0, the
+overlap as CrtFminf(lhsMax, rhsMax) - CrtFmaxf(lhsMin, rhsMin), then
+1 / sqrt(LengthSq) and overlap * inverse - and packed SSE arithmetic rounds
+each lane exactly like the scalar SSE instructions (sqrtps and divps are
+correctly rounded too), so every value is the same bit pattern. The CRT
+fmin/fmax semantics for equal values (+0/-0) are reproduced with a bitwise
+OR/AND. Only whether some axis separates the boxes is observable, not which
+one the scalar loop met first; the best-axis selection and the witness-point
+tail are unchanged scalar code.
+
+For NaN operands x86 returns whichever NaN the instruction names first, and
+for commutative operations that order is the compiler's choice, so the lane
+path only takes inputs whose 30 floats are finite and at most 2^24 in
+magnitude (no intermediate can then overflow or produce a NaN that is read);
+anything else runs the recovered body unchanged
+(ComputeBoxBoxContactManifoldScalar). Every box the game builds is in range.
+
+Checked against the previous implementation bit for bit (return value and all
+ten manifold floats) on 16 million box pairs - game-like boxes (unit boxes,
+yaw-only and free rotations, 1000-high sweep boxes, integer-aligned query
+boxes, a box against itself, touching faces, parallel axes), boxes with
+special values (NaN, infinities, signed zeros, denormals, FLT_MAX) and random
+bit patterns, random in-range magnitudes - under the sim thread's x87
+precision with the default MXCSR, with FTZ+DAZ and with round-toward-zero:
+no difference. 2.4x faster per call. The 30-minute all-AI checksum run is
+identical to the unchanged build's over all 18002 beats; the function went
+from 3.4 % to 1.1 % of the sim thread there at minute 25.
+
+(cherry picked from commit 708433eab72ffd77d75bad3d72a73223d3cace2d)
+
+Ported onto 8977bb9d: upstream (8fea9bae) deleted the neighbouring BuildSegmentFromEndpoints helper; the new SAT code is inserted without re-adding it. The recovered manifold body it mirrors is unchanged upstream.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+(cherry picked from commit 1e0b4594face4ee223541941ebd693360a05dfb6)
+---
+ src/sdk/moho/collision/CColPrimitiveBase.cpp | 308 ++++++++++++++++++-
+ 1 file changed, 307 insertions(+), 1 deletion(-)
+
+diff --git a/src/sdk/moho/collision/CColPrimitiveBase.cpp b/src/sdk/moho/collision/CColPrimitiveBase.cpp
+index 3d24cff0..6e1cd58c 100644
+--- a/src/sdk/moho/collision/CColPrimitiveBase.cpp
++++ b/src/sdk/moho/collision/CColPrimitiveBase.cpp
+@@ -4,6 +4,7 @@
+ #include <bit>
+ #include <cmath>
+ #include <cstdint>
++#include <emmintrin.h>
+ #include <limits>
+ 
+ #include "gpg/core/utils/Global.h"
+@@ -156,14 +157,172 @@ namespace
+   };
+   static_assert(sizeof(BoxBoxContactManifold) == 0x28, "BoxBoxContactManifold size must be 0x28");
+ 
++  /**
++   * Engine addition, not recovered from the binary: the box-box SAT's fifteen
++   * candidate axes laid out four to an SSE register (lane 15 is padding), and
++   * what ComputeSatOverlaps derives for each of them.
++   */
++  struct SatAxisLanes
++  {
++    alignas(16) float x[16];
++    alignas(16) float y[16];
++    alignas(16) float z[16];
++    alignas(16) float lengthSq[16];          // LengthSq(axis)
++    alignas(16) float invLength[16];         // 1 / sqrt(LengthSq(axis))
++    alignas(16) float normalizedOverlap[16]; // interval overlap along the axis * invLength
++  };
++
++  /** One box's projection inputs, each broadcast to all four lanes. */
++  struct SatBoxLanes
++  {
++    __m128 cx, cy, cz;
++    __m128 a0x, a0y, a0z;
++    __m128 a1x, a1y, a1z;
++    __m128 a2x, a2y, a2z;
++    __m128 e0, e1, e2;
++
++    explicit SatBoxLanes(const Wm3::Box3f& box) noexcept
++      : cx(_mm_set1_ps(box.Center[0]))
++      , cy(_mm_set1_ps(box.Center[1]))
++      , cz(_mm_set1_ps(box.Center[2]))
++      , a0x(_mm_set1_ps(box.Axis[0][0]))
++      , a0y(_mm_set1_ps(box.Axis[0][1]))
++      , a0z(_mm_set1_ps(box.Axis[0][2]))
++      , a1x(_mm_set1_ps(box.Axis[1][0]))
++      , a1y(_mm_set1_ps(box.Axis[1][1]))
++      , a1z(_mm_set1_ps(box.Axis[1][2]))
++      , a2x(_mm_set1_ps(box.Axis[2][0]))
++      , a2y(_mm_set1_ps(box.Axis[2][1]))
++      , a2z(_mm_set1_ps(box.Axis[2][2]))
++      , e0(_mm_set1_ps(box.Extent[0]))
++      , e1(_mm_set1_ps(box.Extent[1]))
++      , e2(_mm_set1_ps(box.Extent[2]))
++    {}
++  };
++
++  /**
++   * `ProjectBoxOntoAxis` for four axes at once. Each lane performs the scalar
++   * function's operations in its order - the three dot products as
++   * `(x*x' + y*y') + z*z'`, the radius as `(|d2|*e2 + |d1|*e1) + |d0|*e0`,
++   * then centre minus / plus radius - and packed SSE arithmetic rounds every
++   * lane exactly as the scalar SSE instructions do, so the intervals are the
++   * scalar ones bit for bit.
++   */
++  inline void ProjectBoxOntoAxes4(
++    const SatBoxLanes& box, const __m128 ax, const __m128 ay, const __m128 az, __m128& outMin, __m128& outMax
++  ) noexcept
++  {
++    const __m128 absMask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
++    const __m128 centerProjection =
++      _mm_add_ps(_mm_add_ps(_mm_mul_ps(ax, box.cx), _mm_mul_ps(ay, box.cy)), _mm_mul_ps(az, box.cz));
++    const __m128 d2 = _mm_and_ps(
++      _mm_add_ps(_mm_add_ps(_mm_mul_ps(ax, box.a2x), _mm_mul_ps(ay, box.a2y)), _mm_mul_ps(az, box.a2z)), absMask
++    );
++    const __m128 d1 = _mm_and_ps(
++      _mm_add_ps(_mm_add_ps(_mm_mul_ps(ax, box.a1x), _mm_mul_ps(ay, box.a1y)), _mm_mul_ps(az, box.a1z)), absMask
++    );
++    const __m128 d0 = _mm_and_ps(
++      _mm_add_ps(_mm_add_ps(_mm_mul_ps(ax, box.a0x), _mm_mul_ps(ay, box.a0y)), _mm_mul_ps(az, box.a0z)), absMask
++    );
++    const __m128 radius =
++      _mm_add_ps(_mm_add_ps(_mm_mul_ps(d2, box.e2), _mm_mul_ps(d1, box.e1)), _mm_mul_ps(d0, box.e0));
++    outMin = _mm_sub_ps(centerProjection, radius);
++    outMax = _mm_add_ps(centerProjection, radius);
++  }
++
++  /**
++   * `CrtFminf` on four lanes that hold no NaN: the smaller value, and for
++   * equal values `x` when it is negative, else `y` - for equal values that
++   * is the bitwise OR (they differ only as +0 / -0, and the OR is -0 when
++   * either is).
++   */
++  inline __m128 CrtFminf4(const __m128 x, const __m128 y) noexcept
++  {
++    const __m128 less = _mm_cmplt_ps(x, y);
++    const __m128 greater = _mm_cmplt_ps(y, x);
++    const __m128 equal = _mm_cmpeq_ps(x, y);
++    return _mm_or_ps(
++      _mm_or_ps(_mm_and_ps(less, x), _mm_and_ps(greater, y)), _mm_and_ps(equal, _mm_or_ps(x, y))
++    );
++  }
++
++  /** `CrtFmaxf` likewise; for equal values the result is the bitwise AND (-0 only when both are). */
++  inline __m128 CrtFmaxf4(const __m128 x, const __m128 y) noexcept
++  {
++    const __m128 greater = _mm_cmpgt_ps(x, y);
++    const __m128 less = _mm_cmpgt_ps(y, x);
++    const __m128 equal = _mm_cmpeq_ps(x, y);
++    return _mm_or_ps(
++      _mm_or_ps(_mm_and_ps(greater, x), _mm_and_ps(less, y)), _mm_and_ps(equal, _mm_and_ps(x, y))
++    );
++  }
++
++  /**
++   * The separating-axis loop of ComputeBoxBoxContactManifold (0x00474830),
++   * four axes at a time. Returns false when any axis separates the boxes -
++   * the scalar loop stops at the first one, but only whether one exists is
++   * observable. Otherwise fills, per axis, the interval overlap
++   * `CrtFminf(lhsMax, rhsMax) - CrtFmaxf(lhsMin, rhsMin)` normalised by the
++   * axis length, plus the squared length and inverse length the best-axis
++   * selection reads. Only for inputs within SatInputsInLaneRange.
++   */
++  [[nodiscard]] bool ComputeSatOverlaps(const Wm3::Box3f& lhs, const Wm3::Box3f& rhs, SatAxisLanes& lanes) noexcept
++  {
++    const SatBoxLanes lhsLanes(lhs);
++    const SatBoxLanes rhsLanes(rhs);
++
++    alignas(16) float overlap[16];
++    for (int base = 0; base < 16; base += 4) {
++      const __m128 ax = _mm_load_ps(lanes.x + base);
++      const __m128 ay = _mm_load_ps(lanes.y + base);
++      const __m128 az = _mm_load_ps(lanes.z + base);
++
++      __m128 lhsMin;
++      __m128 lhsMax;
++      __m128 rhsMin;
++      __m128 rhsMax;
++      ProjectBoxOntoAxes4(lhsLanes, ax, ay, az, lhsMin, lhsMax);
++      ProjectBoxOntoAxes4(rhsLanes, ax, ay, az, rhsMin, rhsMax);
++
++      const __m128 separated = _mm_or_ps(_mm_cmpgt_ps(lhsMin, rhsMax), _mm_cmpgt_ps(rhsMin, lhsMax));
++      if (_mm_movemask_ps(separated) != 0) {
++        return false;
++      }
++
++      // SatInputsInLaneRange keeps NaN out of the intervals, which is what the
++      // four-lane CrtFminf / CrtFmaxf need.
++      _mm_store_ps(overlap + base, _mm_sub_ps(CrtFminf4(lhsMax, rhsMax), CrtFmaxf4(lhsMin, rhsMin)));
++    }
++
++    // `LengthSq(axis)` as `(x*x + y*y) + z*z`, `1.0f / sqrt(lengthSq)` and
++    // `overlap * inverse`: sqrtps and divps are correctly rounded per lane,
++    // like the scalar sqrtss and divss.
++    const __m128 one = _mm_set1_ps(1.0f);
++    for (int base = 0; base < 16; base += 4) {
++      const __m128 ax = _mm_load_ps(lanes.x + base);
++      const __m128 ay = _mm_load_ps(lanes.y + base);
++      const __m128 az = _mm_load_ps(lanes.z + base);
++      const __m128 lengthSq = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ax, ax), _mm_mul_ps(ay, ay)), _mm_mul_ps(az, az));
++      const __m128 invLength = _mm_div_ps(one, _mm_sqrt_ps(lengthSq));
++      _mm_store_ps(lanes.lengthSq + base, lengthSq);
++      _mm_store_ps(lanes.invLength + base, invLength);
++      _mm_store_ps(lanes.normalizedOverlap + base, _mm_mul_ps(_mm_load_ps(overlap + base), invLength));
++    }
++    return true;
++  }
++
+   /**
+    * Address: 0x00474830 (FUN_00474830, box-vs-box SAT manifold helper)
+    *
+    * What it does:
+    * Runs SAT overlap checks for two OBBs and returns witness points, penetration
+    * normal, and depth for the best separating axis candidate.
++   *
++   * The recovered body, one axis at a time. ComputeBoxBoxContactManifold
++   * below uses it for inputs the four-lane version does not take (see
++   * SatInputsInLaneRange).
+    */
+-  [[nodiscard]] bool ComputeBoxBoxContactManifold(
++  [[nodiscard]] bool ComputeBoxBoxContactManifoldScalar(
+     const Wm3::Box3f& lhs, const Wm3::Box3f& rhs, BoxBoxContactManifold* outManifold
+   ) noexcept
+   {
+@@ -269,6 +428,153 @@ namespace
+     return true;
+   }
+ 
++  /**
++   * True when every centre, axis and extent component of both boxes is finite
++   * and at most 2^24 in magnitude. Then no product or sum in the SAT can
++   * overflow, so no lane ever holds an infinity or a NaN that is read later
++   * (a zero-length axis's lanes may, but the selection skips those axes),
++   * and the recovered tail after the axis choice sees only finite values.
++   * That matters because for NaN operands x86 returns whichever NaN the
++   * instruction names first, and for commutative operations that order is the
++   * compiler's choice; with no NaNs, packed and scalar arithmetic agree bit
++   * for bit whatever the operand order. Game boxes are map-sized (the largest
++   * extent is the 1000-unit height of the path sweeps).
++   */
++  [[nodiscard]] bool SatInputsInLaneRange(const Wm3::Box3f& lhs, const Wm3::Box3f& rhs) noexcept
++  {
++    static_assert(sizeof(Wm3::Box3f) == 15 * sizeof(float), "Box3f must be 15 packed floats");
++    const __m128 absMask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
++    const __m128 limit = _mm_set1_ps(16777216.0f);
++    int inRange = 0xF;
++    for (const Wm3::Box3f* box : {&lhs, &rhs}) {
++      const float* const f = &box->Center.x;
++      // Four loads cover the fifteen floats; the last one overlaps the third.
++      for (const int offset : {0, 4, 8, 11}) {
++        const __m128 value = _mm_and_ps(_mm_loadu_ps(f + offset), absMask);
++        inRange &= _mm_movemask_ps(_mm_cmple_ps(value, limit)); // NaN compares false
++      }
++    }
++    return inRange == 0xF;
++  }
++
++  /**
++   * Address: 0x00474830 (FUN_00474830, box-vs-box SAT manifold helper)
++   *
++   * What it does:
++   * Runs SAT overlap checks for two OBBs and returns witness points, penetration
++   * normal, and depth for the best separating axis candidate.
++   *
++   * Engine change: the fifteen axis projections and axis normalisations run
++   * four axes at a time (ComputeSatOverlaps, bit-identical per lane) for
++   * inputs within SatInputsInLaneRange - every box the game builds - and the
++   * rest is the recovered body. Other inputs take the recovered body as a
++   * whole (ComputeBoxBoxContactManifoldScalar).
++   */
++  [[nodiscard]] bool ComputeBoxBoxContactManifold(
++    const Wm3::Box3f& lhs, const Wm3::Box3f& rhs, BoxBoxContactManifold* outManifold
++  ) noexcept
++  {
++    if (!SatInputsInLaneRange(lhs, rhs)) {
++      return ComputeBoxBoxContactManifoldScalar(lhs, rhs, outManifold);
++    }
++
++    const Wm3::Vec3f lhsAxes[3] = {BoxAxis(lhs, 0), BoxAxis(lhs, 2), BoxAxis(lhs, 1)};
++    const Wm3::Vec3f rhsAxes[3] = {BoxAxis(rhs, 0), BoxAxis(rhs, 2), BoxAxis(rhs, 1)};
++
++    std::array<Wm3::Vec3f, 15> candidateAxes{};
++    int axisCount = 0;
++    for (int axisIndex = 0; axisIndex < 3; ++axisIndex) {
++      candidateAxes[axisCount++] = lhsAxes[axisIndex];
++    }
++    for (int axisIndex = 0; axisIndex < 3; ++axisIndex) {
++      candidateAxes[axisCount++] = rhsAxes[axisIndex];
++    }
++    for (int lhsAxisIndex = 0; lhsAxisIndex < 3; ++lhsAxisIndex) {
++      for (int rhsAxisIndex = 0; rhsAxisIndex < 3; ++rhsAxisIndex) {
++        candidateAxes[axisCount++] = Wm3::Vector3f::Cross(lhsAxes[lhsAxisIndex], rhsAxes[rhsAxisIndex]);
++      }
++    }
++
++    SatAxisLanes lanes;
++    for (int axisIndex = 0; axisIndex < axisCount; ++axisIndex) {
++      lanes.x[axisIndex] = candidateAxes[axisIndex].x;
++      lanes.y[axisIndex] = candidateAxes[axisIndex].y;
++      lanes.z[axisIndex] = candidateAxes[axisIndex].z;
++    }
++    // Lane 15 repeats axis 0: its separation test adds nothing new and its
++    // overlap is never read.
++    lanes.x[15] = lanes.x[0];
++    lanes.y[15] = lanes.y[0];
++    lanes.z[15] = lanes.z[0];
++    if (!ComputeSatOverlaps(lhs, rhs, lanes)) {
++      return false;
++    }
++
++    float bestDepth = std::numeric_limits<float>::max();
++    int bestAxisIndex = -1;
++    bool hasBestAxis = false;
++    for (int axisIndex = 0; axisIndex < axisCount; ++axisIndex) {
++      if (lanes.lengthSq[axisIndex] < kAxisLengthSqEpsilon) {
++        continue;
++      }
++
++      const float normalizedOverlap = lanes.normalizedOverlap[axisIndex];
++      if (!hasBestAxis || normalizedOverlap < bestDepth) {
++        bestDepth = normalizedOverlap;
++        bestAxisIndex = axisIndex;
++        hasBestAxis = true;
++      }
++    }
++
++    if (!hasBestAxis) {
++      return false;
++    }
++    Wm3::Vec3f bestAxis = candidateAxes[bestAxisIndex] * lanes.invLength[bestAxisIndex];
++
++    const Wm3::Vec3f centerDelta = BuildBoxCenter(rhs) - BuildBoxCenter(lhs);
++    if (Wm3::Vector3f::Dot(centerDelta, bestAxis) > 0.0f) {
++      bestAxis = bestAxis * -1.0f;
++    }
++
++    outManifold->penetrationNormal = bestAxis;
++    outManifold->penetrationDepth = bestDepth;
++
++    if (bestAxisIndex <= 2) {
++      const Wm3::Vec3f supportOnA = ComputeSupportPointAgainstDirection(lhs, bestAxis * -1.0f);
++      outManifold->pointOnB = supportOnA;
++      outManifold->pointOnA = supportOnA - bestAxis * bestDepth;
++      return true;
++    }
++
++    if (bestAxisIndex <= 5) {
++      const Wm3::Vec3f supportOnA = ComputeSupportPointAgainstDirection(lhs, bestAxis);
++      outManifold->pointOnA = supportOnA;
++      outManifold->pointOnB = supportOnA + bestAxis * bestDepth;
++      return true;
++    }
++
++    const int edgeAxisIndex = bestAxisIndex - 6;
++    const int lhsEdgeIndex = edgeAxisIndex / 3;
++    const int rhsEdgeIndex = edgeAxisIndex % 3;
++
++    const Wm3::Vec3f supportOnA = ComputeSupportPointAgainstDirection(lhs, bestAxis);
++    const Wm3::Vec3f supportOnB = ComputeSupportPointAgainstDirection(rhs, bestAxis * -1.0f);
++
++    const Wm3::Vec3f lineAxisLhs = lhsAxes[lhsEdgeIndex];
++    const Wm3::Vec3f lineAxisRhs = rhsAxes[rhsEdgeIndex];
++    const Wm3::Vec3f crossRhsAndNormal = Wm3::Vector3f::Cross(lineAxisRhs, bestAxis);
++    const float denominator = Wm3::Vector3f::Dot(lineAxisLhs, crossRhsAndNormal);
++    if (std::fabs(denominator) < kAxisLengthSqEpsilon) {
++      return false;
++    }
++
++    const float t =
++      (Wm3::Vector3f::Dot(supportOnB, crossRhsAndNormal) - Wm3::Vector3f::Dot(supportOnA, crossRhsAndNormal)) /
++      denominator;
++    outManifold->pointOnA = supportOnA + lineAxisLhs * t;
++    outManifold->pointOnB = outManifold->pointOnA + bestAxis * bestDepth;
++    return true;
++  }
+ } // namespace
+ 
+ namespace moho
+-- 
+2.55.0.windows.3
+

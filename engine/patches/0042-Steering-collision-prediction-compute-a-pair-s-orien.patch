@@ -1,0 +1,325 @@
+From cc5b161f8e7622a37b5b8143aca825d5e11aa859 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 23:19:18 +0200
+Subject: [PATCH 42/52] Steering collision prediction: compute a pair's
+ orientation terms once
+
+PredictCollisionForSteerings (0x00597800) walks the path nodes of two units,
+one in three, and asks UnitsWillCollide (0x00596930) at every step whether
+their braking-inflated boxes meet. Each call builds both 2-D boxes from the
+units' orientations - two normalised axes per unit (BuildCollisionObb2D) -
+and OBB2DIntersects normalises each of the four axes again and projects both
+boxes onto it. Nothing in the loop turns either unit, so all of that is the
+same at every step; only the centres (position plus lead) and the forward
+extents change.
+
+LazyObbPair now keeps those orientation-only terms for the pair - both
+frames, and per separating axis its direction and the four |dot| factors -
+and computes each part the first time a test needs it (the frames when a step
+first gets past the distance precheck, an axis when the separating-axis test
+first reaches it), so a pair never costs more than one UnitsWillCollide call
+did and repeated steps reuse it. UnitsWillCollidePrepared then does the rest
+of UnitsWillCollide with the same operations on the same values, in the same
+axis order with the same early outs. UnitsWillCollide itself is unchanged for
+its other caller.
+
+In teacher-driven games the steering collision checks were the largest cost
+of the sim thread once the swept-path fix was in (about a third of it at
+minute 15, the prediction half of that). Per-beat sim checksums of the
+30-minute all-AI game identical to the unchanged build's over all 18002 beats.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 4ff41939d35857ea675328260e5ca28203bd5473)
+(cherry picked from commit aa8b4a1d186a428df9e8311450985c9fa8a35c04)
+---
+ src/sdk/moho/ai/CAiSteeringImpl.cpp | 229 ++++++++++++++++++++++++++--
+ 1 file changed, 219 insertions(+), 10 deletions(-)
+
+diff --git a/src/sdk/moho/ai/CAiSteeringImpl.cpp b/src/sdk/moho/ai/CAiSteeringImpl.cpp
+index c326a050..dfd15cf4 100644
+--- a/src/sdk/moho/ai/CAiSteeringImpl.cpp
++++ b/src/sdk/moho/ai/CAiSteeringImpl.cpp
+@@ -219,15 +219,25 @@ namespace
+     float extent1;
+   };
+ 
+-  [[nodiscard]] CollisionObb2D BuildCollisionObb2D(
+-    const Unit& unit, const Wm3::Vector3f& position, const float leadDistance, const float inflatedLength
+-  ) noexcept
++  /**
++   * The part of BuildCollisionObb2D that depends only on the unit - its
++   * flattened, normalised forward and right axes and its lateral half-extent
++   * - so a caller testing one pair of units many times can compute it once
++   * (see PredictCollisionForSteerings). Engine addition.
++   */
++  struct CollisionObbFrame
++  {
++    Wm3::Vector2f forward;
++    Wm3::Vector2f right;
++    float lateralExtent;
++  };
++
++  [[nodiscard]] CollisionObbFrame BuildCollisionObbFrame(const Unit& unit) noexcept
+   {
+     const RUnitBlueprint* const blueprint = unit.GetBlueprint();
+     const float sizeX = blueprint ? blueprint->mSizeX : 0.0f;
+     const float sizeZ = blueprint ? blueprint->mSizeZ : 0.0f;
+     const float lateralExtent = (sizeX + sizeZ) * 0.25f;
+-    const float forwardExtent = inflatedLength * 0.5f;
+ 
+     // The rotation matrix's third and first columns, flattened to the XZ plane.
+     // These four locals used to be named qx/qy/qz/qw while holding, in order,
+@@ -244,15 +254,34 @@ namespace
+       ((q.z * q.x) - (q.w * q.y)) * 2.0f,
+     });
+ 
++    return CollisionObbFrame{forward, right, lateralExtent};
++  }
++
++  [[nodiscard]] CollisionObb2D BuildCollisionObb2D(
++    const CollisionObbFrame& frame,
++    const Wm3::Vector3f& position,
++    const float leadDistance,
++    const float inflatedLength
++  ) noexcept
++  {
++    const float forwardExtent = inflatedLength * 0.5f;
++
+     CollisionObb2D out{};
+-    out.center = {position.x + (forward.x * leadDistance), position.z + (forward.y * leadDistance)};
+-    out.axis0 = right;
+-    out.axis1 = forward;
+-    out.extent0 = lateralExtent;
++    out.center = {position.x + (frame.forward.x * leadDistance), position.z + (frame.forward.y * leadDistance)};
++    out.axis0 = frame.right;
++    out.axis1 = frame.forward;
++    out.extent0 = frame.lateralExtent;
+     out.extent1 = forwardExtent;
+     return out;
+   }
+ 
++  [[nodiscard]] CollisionObb2D BuildCollisionObb2D(
++    const Unit& unit, const Wm3::Vector3f& position, const float leadDistance, const float inflatedLength
++  ) noexcept
++  {
++    return BuildCollisionObb2D(BuildCollisionObbFrame(unit), position, leadDistance, inflatedLength);
++  }
++
+   [[nodiscard]] bool
+   OverlapsOnAxis(const CollisionObb2D& lhs, const CollisionObb2D& rhs, const Wm3::Vector2f& axis) noexcept
+   {
+@@ -279,6 +308,55 @@ namespace
+       OverlapsOnAxis(lhs, rhs, rhs.axis0) && OverlapsOnAxis(lhs, rhs, rhs.axis1);
+   }
+ 
++  /**
++   * OverlapsOnAxis's axis-only terms for one axis of a fixed pair of frames:
++   * whether the axis is degenerate, its normalised direction, and the four
++   * `|Dot(box axis, n)|` factors. Only the centres and the forward extents
++   * of the two boxes vary between the pair's tests. Engine addition.
++   */
++  struct PreparedObbAxis
++  {
++    bool degenerate;
++    Wm3::Vector2f n;
++    float lhsAxis0;
++    float lhsAxis1;
++    float rhsAxis0;
++    float rhsAxis1;
++  };
++
++  [[nodiscard]] PreparedObbAxis
++  PrepareObbAxis(const CollisionObbFrame& lhs, const CollisionObbFrame& rhs, const Wm3::Vector2f& axis) noexcept
++  {
++    PreparedObbAxis out{};
++    const float axisLenSq = Wm3::Vector2f::Dot(axis, axis);
++    out.degenerate = axisLenSq <= 1.0e-8f;
++    if (out.degenerate) {
++      return out;
++    }
++    out.n = Wm3::Vector2f::NormalizeOrZero(axis);
++    // CollisionObb2D::axis0 is the frame's right axis, axis1 its forward axis.
++    out.lhsAxis0 = std::fabs(Wm3::Vector2f::Dot(lhs.right, out.n));
++    out.lhsAxis1 = std::fabs(Wm3::Vector2f::Dot(lhs.forward, out.n));
++    out.rhsAxis0 = std::fabs(Wm3::Vector2f::Dot(rhs.right, out.n));
++    out.rhsAxis1 = std::fabs(Wm3::Vector2f::Dot(rhs.forward, out.n));
++    return out;
++  }
++
++  /** OverlapsOnAxis with the axis-only terms taken from `axis`: the same operations on the same values. */
++  [[nodiscard]] bool
++  OverlapsOnPreparedAxis(const CollisionObb2D& lhs, const CollisionObb2D& rhs, const PreparedObbAxis& axis) noexcept
++  {
++    if (axis.degenerate) {
++      return true;
++    }
++
++    const Wm3::Vector2f delta = {rhs.center.x - lhs.center.x, rhs.center.y - lhs.center.y};
++    const float distance = std::fabs(Wm3::Vector2f::Dot(delta, axis.n));
++    const float lhsProjection = axis.lhsAxis0 * lhs.extent0 + axis.lhsAxis1 * lhs.extent1;
++    const float rhsProjection = axis.rhsAxis0 * rhs.extent0 + axis.rhsAxis1 * rhs.extent1;
++    return distance <= (lhsProjection + rhsProjection);
++  }
++
+   /**
+    * Address: 0x00596930 (FUN_00596930, func_UnitsWillCollide)
+    */
+@@ -315,6 +393,121 @@ namespace
+     return OBB2DIntersects(primaryObb, secondaryObb);
+   }
+ 
++  /**
++   * Everything about one pair of units that UnitsWillCollide recomputes on
++   * every call although it depends only on the two units' orientations: both
++   * frames and OverlapsOnAxis's axis-only terms for the four axes. Filled on
++   * first use - the frames when a call first gets past the distance
++   * precheck, each axis when the separating-axis test first reaches it - so
++   * a pair never costs more than one UnitsWillCollide call would, and repeat
++   * tests of the pair reuse it. Engine addition (see
++   * PredictCollisionForSteerings).
++   */
++  class LazyObbPair
++  {
++  public:
++    LazyObbPair(const Unit& primaryUnit, const Unit& secondaryUnit) noexcept
++      : mPrimaryUnit(primaryUnit)
++      , mSecondaryUnit(secondaryUnit)
++    {
++    }
++
++    [[nodiscard]] const CollisionObbFrame& PrimaryFrame() noexcept
++    {
++      EnsureFrames();
++      return mPrimaryFrame;
++    }
++
++    [[nodiscard]] const CollisionObbFrame& SecondaryFrame() noexcept
++    {
++      EnsureFrames();
++      return mSecondaryFrame;
++    }
++
++    /** OBB2DIntersects(primaryObb, secondaryObb) with the pair's axis terms, in its axis order. */
++    [[nodiscard]] bool Intersects(const CollisionObb2D& primaryObb, const CollisionObb2D& secondaryObb) noexcept
++    {
++      for (int axisIndex = 0; axisIndex < 4; ++axisIndex) {
++        if (!OverlapsOnPreparedAxis(primaryObb, secondaryObb, Axis(axisIndex))) {
++          return false;
++        }
++      }
++      return true;
++    }
++
++  private:
++    void EnsureFrames() noexcept
++    {
++      if (!mFramesReady) {
++        mPrimaryFrame = BuildCollisionObbFrame(mPrimaryUnit);
++        mSecondaryFrame = BuildCollisionObbFrame(mSecondaryUnit);
++        mFramesReady = true;
++      }
++    }
++
++    [[nodiscard]] const PreparedObbAxis& Axis(const int axisIndex) noexcept
++    {
++      if (!mAxisReady[axisIndex]) {
++        EnsureFrames();
++        // OBB2DIntersects' order: lhs.axis0, lhs.axis1, rhs.axis0, rhs.axis1 (axis0 = right, axis1 = forward).
++        const CollisionObbFrame& owner = (axisIndex < 2) ? mPrimaryFrame : mSecondaryFrame;
++        const Wm3::Vector2f& axis = ((axisIndex & 1) == 0) ? owner.right : owner.forward;
++        mAxes[axisIndex] = PrepareObbAxis(mPrimaryFrame, mSecondaryFrame, axis);
++        mAxisReady[axisIndex] = true;
++      }
++      return mAxes[axisIndex];
++    }
++
++    const Unit& mPrimaryUnit;
++    const Unit& mSecondaryUnit;
++    bool mFramesReady = false;
++    bool mAxisReady[4] = {false, false, false, false};
++    CollisionObbFrame mPrimaryFrame{};
++    CollisionObbFrame mSecondaryFrame{};
++    PreparedObbAxis mAxes[4]{};
++  };
++
++  /**
++   * UnitsWillCollide for a pair whose units do not turn between calls: the
++   * same computation, with the orientation-only terms taken from `pair`
++   * (a LazyObbPair over the same primary and secondary units). Every value it
++   * compares is the one UnitsWillCollide would compute. Engine addition.
++   */
++  [[nodiscard]] bool UnitsWillCollidePrepared(
++    const Wm3::Vector3f& primaryVelocity,
++    const Unit& secondaryUnit,
++    const Unit& primaryUnit,
++    const Wm3::Vector3f& primaryPos,
++    const Wm3::Vector3f& secondaryPos,
++    const Wm3::Vector3f& secondaryVelocity,
++    const bool ignoreBraking,
++    LazyObbPair& pair
++  ) noexcept
++  {
++    const RUnitBlueprint* const primaryBlueprint = primaryUnit.GetBlueprint();
++    const RUnitBlueprint* const secondaryBlueprint = secondaryUnit.GetBlueprint();
++    if (!primaryBlueprint || !secondaryBlueprint) {
++      return false;
++    }
++
++    const float primaryLead = ComputeBrakingLeadDistance(primaryVelocity, primaryBlueprint->Physics, ignoreBraking);
++    const float secondaryLead =
++      ComputeBrakingLeadDistance(secondaryVelocity, secondaryBlueprint->Physics, ignoreBraking);
++    const float primaryInflatedLength = primaryBlueprint->mSizeZ + primaryLead;
++    const float secondaryInflatedLength = secondaryBlueprint->mSizeZ + secondaryLead;
++
++    const float precheckRadius = primaryInflatedLength + secondaryInflatedLength;
++    if (Wm3::Vector3f::DistanceSq3D(primaryPos, secondaryPos) > (precheckRadius * precheckRadius)) {
++      return false;
++    }
++
++    const CollisionObb2D primaryObb =
++      BuildCollisionObb2D(pair.PrimaryFrame(), primaryPos, primaryLead, primaryInflatedLength);
++    const CollisionObb2D secondaryObb =
++      BuildCollisionObb2D(pair.SecondaryFrame(), secondaryPos, secondaryLead, secondaryInflatedLength);
++    return pair.Intersects(primaryObb, secondaryObb);
++  }
++
+   // moho::func_IsSourceUnit (FUN_0062EEA0) is defined at namespace-moho file
+   // scope below so COGrid::UnitIsBlocked can invoke it cross-TU by name.
+ 
+@@ -513,6 +706,15 @@ namespace
+     const std::int32_t tickBase =
+       (primaryUnit->SimulationRef != nullptr) ? static_cast<std::int32_t>(primaryUnit->SimulationRef->mCurTick) : 0;
+ 
++    // Engine addition: the loop below tests this pair of units at up to one
++    // path node in three, and nothing in it turns either unit, so the
++    // orientation-only half of every test (both units' flattened axes and the
++    // separating-axis factors between them) is the same each time. LazyObbPair
++    // computes each part once, when a test first needs it;
++    // UnitsWillCollidePrepared does the rest of UnitsWillCollide with the same
++    // values.
++    LazyObbPair pair(*primaryUnit, *secondaryUnit);
++
+     Wm3::Vector3f primaryPos = primaryUnit->GetPosition();
+     Wm3::Vector3f secondaryPos = secondaryUnit->GetPosition();
+     Wm3::Vector3f prevPrimaryPos = primaryPos;
+@@ -558,8 +760,15 @@ namespace
+         prevPrimaryPos = primaryPos;
+       }
+ 
+-      if (UnitsWillCollide(
+-            secondaryVelocity, *secondaryUnit, *primaryUnit, secondaryPos, primaryPos, primaryVelocity, ignoreBraking
++      if (UnitsWillCollidePrepared(
++            secondaryVelocity,
++            *secondaryUnit,
++            *primaryUnit,
++            secondaryPos,
++            primaryPos,
++            primaryVelocity,
++            ignoreBraking,
++            pair
+           )) {
+         const float existingCollisionDistSq = collisionInfo->mUnit.GetObjectPtr() != nullptr
+           ? Wm3::Vector3f::DistanceSq3D(secondaryPos, collisionInfo->mPos)
+-- 
+2.55.0.windows.3
+

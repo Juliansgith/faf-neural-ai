@@ -1,7 +1,7 @@
-From fbf8c640c7dcf617aaddd748d7a5aff63904cc44 Mon Sep 17 00:00:00 2001
+From 2b1c2ad996c09b61c2925dff0de6b0d9f49ab6be Mon Sep 17 00:00:00 2001
 From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
 Date: Tue, 29 Sep 2026 15:12:39 +0200
-Subject: [PATCH 06/56] Give the per-file ClassBinderSimLuaInitSet helpers
+Subject: [PATCH 06/52] Give the per-file ClassBinderSimLuaInitSet helpers
  internal linkage
 
 CAiBrainLuaFunctionThunks.cpp, CAiPersonalityLuaFunctionThunks.cpp and
@@ -10,6 +10,7 @@ ClassBinderSimLuaInitSet(); under /FORCE only one definition survived.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 (cherry picked from commit b8e841888539e51f9d720d502d8975dd0260a8a9)
+(cherry picked from commit fbf8c640c7dcf617aaddd748d7a5aff63904cc44)
 ---
  src/sdk/moho/ai/CAiBrainLuaFunctionThunks.cpp        | 2 +-
  src/sdk/moho/ai/CAiPersonalityLuaFunctionThunks.cpp  | 2 +-
@@ -43,7 +44,7 @@ index 65155612..9d436cc0 100644
      if (CScrLuaInitFormSet* const set = SCR_FindLuaInitFormSet("Sim"); set != nullptr) {
        return *set;
 diff --git a/src/sdk/moho/sim/ManipulatorStartupRegistrations.cpp b/src/sdk/moho/sim/ManipulatorStartupRegistrations.cpp
-index 72695d8e..2044b2b6 100644
+index ba8d00f0..52f6c0d3 100644
 --- a/src/sdk/moho/sim/ManipulatorStartupRegistrations.cpp
 +++ b/src/sdk/moho/sim/ManipulatorStartupRegistrations.cpp
 @@ -512,7 +512,7 @@ namespace

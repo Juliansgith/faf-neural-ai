@@ -1,0 +1,98 @@
+From b1d31cf7d3fc8806b504bdcf2379dc9447997e68 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 23:19:46 +0200
+Subject: [PATCH 45/52] Aim tracking and animation wraps: no CRT fmod call for
+ angles already in range
+
+CAimManipulator::CheckTracking (0x006309F0) wraps up to four angles per
+tracking weapon per tick through std::fmod(angle, 2*pi), and
+CAnimationManipulator wraps animation times the same way; each is a call
+into the CRT (_CIfmod). In AI-vs-AI battles those calls were about 3 % of
+the sim thread.
+
+fmod is exact, and when |x| < |y| its truncated quotient is 0, so it returns
+x itself. FmodSmallAware returns x directly in that case and calls fmod for
+every other input (larger magnitudes, NaN, infinities), so the results are
+the same bits. The angles here are almost always already within one turn.
+
+Verified with the 30-minute all-AI checksum run (identical over all 18002
+beats).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 58df3a02877b1861f9770483daa71b8fc7a105d0)
+(cherry picked from commit f67120c0eaf37f628f95ee7f22039755106b1dc5)
+---
+ src/sdk/moho/ai/CAimManipulator.cpp              | 16 ++++++++++++++--
+ src/sdk/moho/animation/CAnimationManipulator.cpp | 14 +++++++++++++-
+ 2 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/src/sdk/moho/ai/CAimManipulator.cpp b/src/sdk/moho/ai/CAimManipulator.cpp
+index 6ad6f1bd..415884ec 100644
+--- a/src/sdk/moho/ai/CAimManipulator.cpp
++++ b/src/sdk/moho/ai/CAimManipulator.cpp
+@@ -269,9 +269,21 @@ namespace
+     return fallbackSet;
+   }
+ 
++  /**
++   * `std::fmod(x, y)` without the CRT call (_CIfmod) when |x| < |y|: the
++   * quotient then truncates to 0 and fmod, which is exact, returns x itself.
++   * Every other input (including NaN and infinities) still calls fmod.
++   * Engine change: aim tracking wraps four angles per weapon per tick, and the
++   * calls were about 3 % of the sim thread in large battles.
++   */
++  [[nodiscard]] inline float FmodSmallAware(const float x, const float y) noexcept
++  {
++    return (std::fabs(x) < std::fabs(y)) ? x : std::fmod(x, y);
++  }
++
+   [[nodiscard]] float NormalizeCenteredAngle(const float minimum, const float maximum) noexcept
+   {
+-    float centered = std::fmod((minimum + maximum) * kHalfScale, kTwoPiRadians);
++    float centered = FmodSmallAware((minimum + maximum) * kHalfScale, kTwoPiRadians);
+     if (centered < -kPiRadians) {
+       centered += kTwoPiRadians;
+     } else if (centered > kPiRadians) {
+@@ -282,7 +294,7 @@ namespace
+ 
+   [[nodiscard]] float NormalizeAngleRadians(float angleRadians) noexcept
+   {
+-    angleRadians = std::fmod(angleRadians, kTwoPiRadians);
++    angleRadians = FmodSmallAware(angleRadians, kTwoPiRadians);
+     if (angleRadians < -kPiRadians) {
+       angleRadians += kTwoPiRadians;
+     } else if (angleRadians > kPiRadians) {
+diff --git a/src/sdk/moho/animation/CAnimationManipulator.cpp b/src/sdk/moho/animation/CAnimationManipulator.cpp
+index 615cb7a6..c55834db 100644
+--- a/src/sdk/moho/animation/CAnimationManipulator.cpp
++++ b/src/sdk/moho/animation/CAnimationManipulator.cpp
+@@ -165,13 +165,25 @@ namespace
+     return ScaClipHeader(*resource)->mFrameCount;
+   }
+ 
++  /**
++   * `std::fmod(x, y)` without the CRT call (_CIfmod) when |x| < |y|: the
++   * quotient then truncates to 0 and fmod, which is exact, returns x itself.
++   * Every other input (including NaN and infinities) still calls fmod.
++   * Engine change: animation frames wrap here every tick (see
++   * CAimManipulator.cpp for the same helper).
++   */
++  [[nodiscard]] inline float FmodSmallAware(const float x, const float y) noexcept
++  {
++    return (std::fabs(x) < std::fabs(y)) ? x : std::fmod(x, y);
++  }
++
+   [[nodiscard]] float WrapToRange(const float value, const float range)
+   {
+     if (range == 0.0f) {
+       return 0.0f;
+     }
+ 
+-    float wrapped = std::fmod(value, range);
++    float wrapped = FmodSmallAware(value, range);
+     if (wrapped < 0.0f) {
+       wrapped += range;
+     }
+-- 
+2.55.0.windows.3
+

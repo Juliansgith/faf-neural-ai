@@ -1,7 +1,7 @@
-From 105e9d258c5d5ee362b0d7ac7adee23bfbc94c8e Mon Sep 17 00:00:00 2001
+From 1399eeaf6a9b2bd5248db5fa8f6a7fddeecda88d Mon Sep 17 00:00:00 2001
 From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
 Date: Tue, 29 Sep 2026 15:12:40 +0200
-Subject: [PATCH 07/56] Gate diagnostic probes behind /diag
+Subject: [PATCH 07/52] Gate diagnostic probes behind /diag
 
 The tree carries many temporary probes that log through Logf/Warnf/Debugf
 with a bracketed tag ([STEERDIAG], [MOTDIAG], ...) -- some per unit per tick,
@@ -14,23 +14,38 @@ They are now dropped before formatting unless the game runs with /diag
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 (cherry picked from commit 31f5abbc4285f60aca6988514c4c73a8c2886ef3)
+(cherry picked from commit 105e9d258c5d5ee362b0d7ac7adee23bfbc94c8e)
+
+Ported onto 13ce9e55: upstream 5d68809b had already purged the faf_diag probes this commit gated in Sim.cpp, CUnitLoadUnits.cpp and CArmyLuaFunctionRegistrations.cpp (those hunks dropped); upstream's newer faf_diag.log probes (replay beat pipeline, silo assist, thrust, effects, Lua error mirrors, unit spawn, the sim-stall watchdog) are gated the same way.
 ---
  src/sdk/gpg/core/utils/Logging.cpp            | 85 ++++++++++++++++++-
  src/sdk/gpg/core/utils/Logging.h              | 16 ++++
+ src/sdk/moho/animation/CThrustManipulator.cpp |  7 +-
  .../effects/rendering/CEffectManagerImpl.cpp  |  2 +-
  src/sdk/moho/effects/rendering/CEfxBeam.cpp   |  2 +-
- .../sim/CArmyLuaFunctionRegistrations.cpp     |  4 +-
+ .../moho/effects/rendering/CEfxEmitter.cpp    |  3 +-
+ .../effects/rendering/CEfxTrailEmitter.cpp    |  3 +-
+ src/sdk/moho/mesh/HardwareMeshBatch.cpp       |  2 +-
+ src/sdk/moho/misc/CDecoder.cpp                |  5 +-
+ src/sdk/moho/net/CClientManagerImpl.cpp       |  2 +-
+ src/sdk/moho/net/CReplayClient.cpp            |  6 +-
+ src/sdk/moho/particles/CWorldParticles.cpp    |  3 +-
+ .../moho/particles/ParticleRenderBuckets.cpp  |  2 +-
+ src/sdk/moho/script/CScriptObject.cpp         |  2 +-
  src/sdk/moho/sim/CWldSession.cpp              |  2 +-
- src/sdk/moho/sim/Sim.cpp                      |  2 +-
+ src/sdk/moho/sim/Sim.cpp                      | 10 +--
+ src/sdk/moho/sim/SimDriver.cpp                | 13 +--
+ src/sdk/moho/unit/core/Unit.cpp               |  2 +-
  src/sdk/moho/unit/core/UnitWeapon.cpp         |  2 +-
- src/sdk/moho/unit/tasks/CUnitLoadUnits.cpp    |  2 +-
- 9 files changed, 108 insertions(+), 9 deletions(-)
+ src/sdk/moho/unit/tasks/CBuildTaskHelper.cpp  |  3 +-
+ src/sdk/moho/unit/tasks/CUnitGuardTask.cpp    |  3 +-
+ 21 files changed, 141 insertions(+), 34 deletions(-)
 
 diff --git a/src/sdk/gpg/core/utils/Logging.cpp b/src/sdk/gpg/core/utils/Logging.cpp
-index 489c163a..7d20dfca 100644
+index b594f373..67409029 100644
 --- a/src/sdk/gpg/core/utils/Logging.cpp
 +++ b/src/sdk/gpg/core/utils/Logging.cpp
-@@ -11,6 +11,7 @@
+@@ -9,6 +9,7 @@
  #include <Windows.h>
  
  #include <algorithm>
@@ -38,16 +53,16 @@ index 489c163a..7d20dfca 100644
  #include <cstdarg>
  #include <cstddef>
  #include <cstdint>
-@@ -1210,7 +1211,7 @@ void LogContext::Dispatch(const LogSeverity level, const msvc8::string& msg)
-     // those probes are readable in the VS Output window with no extra setup.
-     // Info/Debug are deliberately excluded: they are high-volume and would
-     // flood the window.
+@@ -1202,7 +1203,7 @@ int DebugOutputStreambuf::sync()
+  */
+ void LogContext::Dispatch(const LogSeverity level, const msvc8::string& msg)
+ {
 -    if (level >= LogSeverity::Warn && head.next == &head) {
 +    if (level >= LogSeverity::Warn && head.next == &head && LogDiagnosticsEnabled()) {
          ::OutputDebugStringA(msg.c_str());
          ::OutputDebugStringA("\n");
      }
-@@ -1465,6 +1466,76 @@ void gpg::LogScopeEntry::Emit()
+@@ -1457,6 +1458,76 @@ void gpg::LogScopeEntry::Emit()
      body.clear();
  }
  
@@ -124,7 +139,7 @@ index 489c163a..7d20dfca 100644
  /**
   * Address: 0x00937C00 (FUN_00937C00, gpg::LogMessage)
   *
-@@ -1473,6 +1544,9 @@ void gpg::LogScopeEntry::Emit()
+@@ -1465,6 +1536,9 @@ void gpg::LogScopeEntry::Emit()
   */
  void gpg::LogMessage(const LogSeverity level, const msvc8::string& message)
  {
@@ -134,7 +149,7 @@ index 489c163a..7d20dfca 100644
      std::call_once(g_LogOnce, &InitLogSingleton);
      if (g_LogCtx) {
          g_LogCtx->Dispatch(level, message);
-@@ -1487,6 +1561,9 @@ void gpg::LogMessage(const LogSeverity level, const msvc8::string& message)
+@@ -1479,6 +1553,9 @@ void gpg::LogMessage(const LogSeverity level, const msvc8::string& message)
   */
  void gpg::Logf(const char* fmt, ...)
  {
@@ -144,7 +159,7 @@ index 489c163a..7d20dfca 100644
      va_list va;
      va_start(va, fmt);
      const msvc8::string msg = STR_Va(fmt, va);
-@@ -1506,6 +1583,9 @@ void gpg::Logf(const char* fmt, ...)
+@@ -1498,6 +1575,9 @@ void gpg::Logf(const char* fmt, ...)
   */
  void gpg::Warnf(const char* fmt, ...)
  {
@@ -154,7 +169,7 @@ index 489c163a..7d20dfca 100644
      va_list va;
      va_start(va, fmt);
      const msvc8::string msg = STR_Va(fmt, va);
-@@ -1525,6 +1605,9 @@ void gpg::Warnf(const char* fmt, ...)
+@@ -1517,6 +1597,9 @@ void gpg::Warnf(const char* fmt, ...)
   */
  void gpg::Debugf(const char* fmt, ...)
  {
@@ -165,7 +180,7 @@ index 489c163a..7d20dfca 100644
      va_start(va, fmt);
      const msvc8::string msg = STR_Va(fmt, va);
 diff --git a/src/sdk/gpg/core/utils/Logging.h b/src/sdk/gpg/core/utils/Logging.h
-index 0470c1ea..30b1874e 100644
+index 0ff5e0d9..0c3ebe13 100644
 --- a/src/sdk/gpg/core/utils/Logging.h
 +++ b/src/sdk/gpg/core/utils/Logging.h
 @@ -588,6 +588,22 @@ namespace gpg
@@ -191,11 +206,48 @@ index 0470c1ea..30b1874e 100644
      /**
       * Address: 0x008E4A40 (?EnableLogHistory@gpg@@YAXH@Z)
       *
+diff --git a/src/sdk/moho/animation/CThrustManipulator.cpp b/src/sdk/moho/animation/CThrustManipulator.cpp
+index fd780525..4ad375ef 100644
+--- a/src/sdk/moho/animation/CThrustManipulator.cpp
++++ b/src/sdk/moho/animation/CThrustManipulator.cpp
+@@ -1,4 +1,5 @@
+ #include <algorithm>
++#include "gpg/core/utils/Logging.h"
+ #include <cstddef>
+ #include <cstdint>
+ #include <cstdio>
+@@ -247,7 +248,7 @@ namespace moho
+         Unit* const probeUnit = mUnit.GetObjectPtr();
+         CAniPoseBone* const probeBone = ResolveWatchedThrustBone(this);
+         const char* const probeUnitName = (probeUnit != nullptr) ? "unit" : "null";
+-        std::FILE* const sink = std::fopen("faf_diag.log", "a");
++        std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+         if (sink != nullptr) {
+           std::fprintf(
+             sink,
+@@ -328,7 +329,7 @@ namespace moho
+       ++sProbeAimSeen;
+       if (sProbeAim < 30 && (sProbeAimSeen % 20) == 0) {
+         ++sProbeAim;
+-        std::FILE* const sink = std::fopen("faf_diag.log", "a");
++        std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+         if (sink != nullptr) {
+           std::fprintf(
+             sink,
+@@ -375,7 +376,7 @@ namespace moho
+                                            (composite.orient_.y * composite.orient_.y)));
+         const float fwdX = (2.0f * ((composite.orient_.x * composite.orient_.z) +
+                                      (composite.orient_.w * composite.orient_.y)));
+-        std::FILE* const sink = std::fopen("faf_diag.log", "a");
++        std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+         if (sink != nullptr) {
+           std::fprintf(
+             sink,
 diff --git a/src/sdk/moho/effects/rendering/CEffectManagerImpl.cpp b/src/sdk/moho/effects/rendering/CEffectManagerImpl.cpp
-index 1ff20d63..1e46f82d 100644
+index d41c58b6..018a1f51 100644
 --- a/src/sdk/moho/effects/rendering/CEffectManagerImpl.cpp
 +++ b/src/sdk/moho/effects/rendering/CEffectManagerImpl.cpp
-@@ -36,7 +36,7 @@ namespace
+@@ -37,7 +37,7 @@ namespace
    // probes below append here instead. The file lands beside the executable.
    void DiagLine(const char* const fmt, ...)
    {
@@ -205,11 +257,11 @@ index 1ff20d63..1e46f82d 100644
        return;
      }
 diff --git a/src/sdk/moho/effects/rendering/CEfxBeam.cpp b/src/sdk/moho/effects/rendering/CEfxBeam.cpp
-index b26c83c3..2e4a8a69 100644
+index 21354ab0..9aa75bdd 100644
 --- a/src/sdk/moho/effects/rendering/CEfxBeam.cpp
 +++ b/src/sdk/moho/effects/rendering/CEfxBeam.cpp
-@@ -35,7 +35,7 @@ namespace
-   // probes below append here instead. The file lands beside the executable.
+@@ -33,7 +33,7 @@ namespace
+ {
    void DiagLine(const char* const fmt, ...)
    {
 -    std::FILE* const sink = std::fopen("faf_diag.log", "a");
@@ -217,33 +269,179 @@ index b26c83c3..2e4a8a69 100644
      if (sink == nullptr) {
        return;
      }
-diff --git a/src/sdk/moho/sim/CArmyLuaFunctionRegistrations.cpp b/src/sdk/moho/sim/CArmyLuaFunctionRegistrations.cpp
-index 82e61355..fb86d4da 100644
---- a/src/sdk/moho/sim/CArmyLuaFunctionRegistrations.cpp
-+++ b/src/sdk/moho/sim/CArmyLuaFunctionRegistrations.cpp
-@@ -521,7 +521,7 @@ namespace moho
-     // TEMPORARY PROBE -- records whether the unit-cap gate this path used to go
-     // through would have rejected the initial unit. Delete once attributed.
+diff --git a/src/sdk/moho/effects/rendering/CEfxEmitter.cpp b/src/sdk/moho/effects/rendering/CEfxEmitter.cpp
+index 38bd1ae6..7f377888 100644
+--- a/src/sdk/moho/effects/rendering/CEfxEmitter.cpp
++++ b/src/sdk/moho/effects/rendering/CEfxEmitter.cpp
+@@ -1,4 +1,5 @@
+ #include "moho/effects/rendering/CEfxEmitter.h"
++#include "gpg/core/utils/Logging.h"
+ 
+ #include <cmath>
+ #include <cstddef>
+@@ -55,7 +56,7 @@ namespace
+   // here instead. The file lands beside the executable.
+   void FxAttachDiagLine(const char* const fmt, ...)
+   {
+-    std::FILE* const sink = std::fopen("faf_diag.log", "a");
++    std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+     if (sink == nullptr) {
+       return;
+     }
+diff --git a/src/sdk/moho/effects/rendering/CEfxTrailEmitter.cpp b/src/sdk/moho/effects/rendering/CEfxTrailEmitter.cpp
+index a4aeb4b9..f47a7a7e 100644
+--- a/src/sdk/moho/effects/rendering/CEfxTrailEmitter.cpp
++++ b/src/sdk/moho/effects/rendering/CEfxTrailEmitter.cpp
+@@ -1,4 +1,5 @@
+ #include "moho/effects/rendering/CEfxTrailEmitter.h"
++#include "gpg/core/utils/Logging.h"
+ 
+ #include <cstddef>
+ #include <cstdint>
+@@ -49,7 +50,7 @@ namespace
+   // here instead. The file lands beside the executable.
+   void TrailDiagLine(const char* const fmt, ...)
+   {
+-    std::FILE* const sink = std::fopen("faf_diag.log", "a");
++    std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+     if (sink == nullptr) {
+       return;
+     }
+diff --git a/src/sdk/moho/mesh/HardwareMeshBatch.cpp b/src/sdk/moho/mesh/HardwareMeshBatch.cpp
+index 54f3ad24..f7f53f1c 100644
+--- a/src/sdk/moho/mesh/HardwareMeshBatch.cpp
++++ b/src/sdk/moho/mesh/HardwareMeshBatch.cpp
+@@ -419,7 +419,7 @@ namespace moho
+         // Mirror into faf_diag.log (gpg::Logf only reaches an active /log
+         // target): this line is the one-shot proof the FAF_BONE_TEXTURE mesh
+         // effect engaged, which the base-view FPS triage depends on knowing.
+-        if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++        if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+           std::fprintf(sink, "[BONETEX] engaged: %ux%u, room for %u bones\n", kWidth, rows, rows * kBonesPerRow);
+           std::fclose(sink);
+         }
+diff --git a/src/sdk/moho/misc/CDecoder.cpp b/src/sdk/moho/misc/CDecoder.cpp
+index 421d2826..d6e16e77 100644
+--- a/src/sdk/moho/misc/CDecoder.cpp
++++ b/src/sdk/moho/misc/CDecoder.cpp
+@@ -1,4 +1,5 @@
+ #include "CDecoder.h"
++#include "gpg/core/utils/Logging.h"
+ 
+ #include <cstdio>
+ #include <cstring>
+@@ -436,7 +437,7 @@ namespace moho
      {
--      std::FILE* const sink = std::fopen("faf_diag.log", "a");
-+      std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
-       if (sink != nullptr) {
-         const bool ignoreCap = army->IgnoreUnitCap();
-         const float cap = army->GetUnitCap();
-@@ -552,7 +552,7 @@ namespace moho
-     // TEMPORARY PROBE -- is the Lua side actually receiving a unit? Delete once
-     // attributed.
+       static int sProbeIssue = 0;
+       if ((++sProbeIssue % 10) == 1) {
+-        if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++        if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+           std::fprintf(
+             sink,
+             "[BEATPIPE] issueCmd n=%d bits=%u type=%u cmdId=0x%08x target=0x%08x\n",
+@@ -604,7 +605,7 @@ namespace moho
      {
--      std::FILE* const sink = std::fopen("faf_diag.log", "a");
-+      std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
-       if (sink != nullptr) {
-         (void)std::fprintf(
-           sink, "[CDRSPAWN] created unit=%p luaObjState=%p pos=(%.1f,%.1f,%.1f) id=0x%08X\n",
+       static int sProbeDbg = 0;
+       if ((++sProbeDbg % 10) == 1) {
+-        if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++        if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+           std::fprintf(
+             sink,
+             "[BEATPIPE] debugCmd n=%d focus=%u cmd=%.80s\n",
+diff --git a/src/sdk/moho/net/CClientManagerImpl.cpp b/src/sdk/moho/net/CClientManagerImpl.cpp
+index 91c22e09..40b73de8 100644
+--- a/src/sdk/moho/net/CClientManagerImpl.cpp
++++ b/src/sdk/moho/net/CClientManagerImpl.cpp
+@@ -960,7 +960,7 @@ void CClientManagerImpl::DoBeat()
+     {
+       static int sProbeAvail = 0;
+       if ((++sProbeAvail % 50) == 1) {
+-        if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++        if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+           std::fprintf(
+             sink,
+             "[BEATPIPE] availAdvance n=%d from=%d clients=%u ready=%d everyone=%d\n",
+diff --git a/src/sdk/moho/net/CReplayClient.cpp b/src/sdk/moho/net/CReplayClient.cpp
+index 902855d9..323a3ea3 100644
+--- a/src/sdk/moho/net/CReplayClient.cpp
++++ b/src/sdk/moho/net/CReplayClient.cpp
+@@ -215,7 +215,7 @@ void CReplayClient::Start()
+   {
+     static int sProbeStart = 0;
+     if ((++sProbeStart % 50) == 1) {
+-      if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++      if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+         std::fprintf(
+           sink,
+           "[BEATPIPE] replayStart n=%d poll=%d stream=%p queued=%u dispatched=%u\n",
+@@ -249,7 +249,7 @@ void CReplayClient::Start()
+       {
+         static int sProbeSrc = 0;
+         if ((sProbeSrc++ % 20) == 0) {
+-          if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++          if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+             std::fprintf(
+               sink,
+               "[BEATPIPE] setSource src=%u allowed=%d\n",
+@@ -267,7 +267,7 @@ void CReplayClient::Start()
+       {
+         static int sProbeCmd = 0;
+         if ((sProbeCmd++ % 20) == 0) {
+-          if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++          if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+             std::fprintf(
+               sink,
+               "[BEATPIPE] replayCmd type=%u allowed=%d queued=%u dispatched=%u\n",
+diff --git a/src/sdk/moho/particles/CWorldParticles.cpp b/src/sdk/moho/particles/CWorldParticles.cpp
+index 38a26313..f0872b21 100644
+--- a/src/sdk/moho/particles/CWorldParticles.cpp
++++ b/src/sdk/moho/particles/CWorldParticles.cpp
+@@ -1,4 +1,5 @@
+ #include "moho/particles/CWorldParticles.h"
++#include "gpg/core/utils/Logging.h"
+ 
+ #include <cstring>
+ #include <cstdlib>
+@@ -455,7 +456,7 @@ namespace
+       static int sProbeBindSeen = 0;
+       ++sProbeBindSeen;
+       if ((sProbeBindSeen % 1000) == 0) {
+-        std::FILE* const sink = std::fopen("faf_diag.log", "a");
++        std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+         if (sink != nullptr) {
+           std::fprintf(
+             sink,
+diff --git a/src/sdk/moho/particles/ParticleRenderBuckets.cpp b/src/sdk/moho/particles/ParticleRenderBuckets.cpp
+index ecca134c..51a96f4c 100644
+--- a/src/sdk/moho/particles/ParticleRenderBuckets.cpp
++++ b/src/sdk/moho/particles/ParticleRenderBuckets.cpp
+@@ -474,7 +474,7 @@ namespace moho
+           if ((sProbeUploadSeen % 100) != 0) {
+             break;
+           }
+-          std::FILE* const sink = std::fopen("faf_diag.log", "a");
++          std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+           if (sink != nullptr) {
+             ++sProbeUpload;
+             std::fprintf(
+diff --git a/src/sdk/moho/script/CScriptObject.cpp b/src/sdk/moho/script/CScriptObject.cpp
+index fda325ff..f3ce12ff 100644
+--- a/src/sdk/moho/script/CScriptObject.cpp
++++ b/src/sdk/moho/script/CScriptObject.cpp
+@@ -805,7 +805,7 @@ void CScriptObject::LogScriptWarning(CScriptObject* obj, const char* which, cons
+   {
+     static DiagnosticBudget sScriptErrorBudget;
+     if (sScriptErrorBudget.Take(200)) {
+-      if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++      if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+         std::fprintf(
+           sink, "[LUADIAG] Error running %s script in %s: %s\n",
+           which ? which : "<unknown>", where, message ? message : ""
 diff --git a/src/sdk/moho/sim/CWldSession.cpp b/src/sdk/moho/sim/CWldSession.cpp
-index ecf5ac25..6c249767 100644
+index 35dc0a88..02f0bad3 100644
 --- a/src/sdk/moho/sim/CWldSession.cpp
 +++ b/src/sdk/moho/sim/CWldSession.cpp
-@@ -117,7 +117,7 @@ namespace
+@@ -123,7 +123,7 @@ namespace
    // drag-unload probes append here instead. The file lands beside the exe.
    void UnloadDragDiagLine(const char* const fmt, ...)
    {
@@ -253,23 +451,135 @@ index ecf5ac25..6c249767 100644
        return;
      }
 diff --git a/src/sdk/moho/sim/Sim.cpp b/src/sdk/moho/sim/Sim.cpp
-index d5f4c7c6..93a2a990 100644
+index 6f605d88..ace8bf4e 100644
 --- a/src/sdk/moho/sim/Sim.cpp
 +++ b/src/sdk/moho/sim/Sim.cpp
-@@ -2735,7 +2735,7 @@ namespace
-   // probe below appends here instead. The file lands beside the executable.
-   void DiagLine(const char* const fmt, ...)
+@@ -8432,7 +8432,7 @@ void Sim::IssueCommand(
+           ++resolvedCount;
+         }
+       });
+-      if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++      if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+         std::fprintf(
+           sink,
+           "[BEATPIPE] simIssue n=%d type=%u cmdId=0x%08x bits=%u first=0x%08x resolved=%u curSrc=%d\n",
+@@ -8793,7 +8793,7 @@ void Sim::LuaSimCallback(
+     {
+       static DiagnosticBudget sSimCallbackErrorBudget;
+       if (sSimCallbackErrorBudget.Take(200)) {
+-        if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++        if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+           std::fprintf(sink, "[LUADIAG] sim callback '%s': %s\n", callbackName, error.what());
+           std::fclose(sink);
+         }
+@@ -10226,14 +10226,14 @@ int Sim::SimLua(
+ 
+   // TEMPORARY PROBE -- replay beat-pipeline triage. Delete when resolved.
    {
--    std::FILE* const sink = std::fopen("faf_diag.log", "a");
-+    std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
-     if (sink == nullptr) {
-       return;
+-    if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++    if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+       std::fprintf(sink, "[BEATPIPE] simLua running len=%u head=%.60s\n", static_cast<unsigned>(commandText.size()), commandText.c_str());
+       std::fclose(sink);
      }
+   }
+   const int luaResult = SCR_LuaDoString(commandText.c_str(), sim->mLuaState);
+   {
+-    if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++    if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+       std::fprintf(sink, "[BEATPIPE] simLua result=%d\n", luaResult);
+       std::fclose(sink);
+     }
+@@ -10493,7 +10493,7 @@ void Sim::AdvanceBeat(const int amt)
+   {
+     static int sProbeBeat = 0;
+     if ((++sProbeBeat % 200) == 0) {
+-      if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++      if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+         std::fprintf(
+           sink,
+           "[BEATPIPE] simAdvanceBeat n=%d beat=%u tick=%u paused=%d singleStep=%d\n",
+diff --git a/src/sdk/moho/sim/SimDriver.cpp b/src/sdk/moho/sim/SimDriver.cpp
+index 52ec7d9c..842beaf2 100644
+--- a/src/sdk/moho/sim/SimDriver.cpp
++++ b/src/sdk/moho/sim/SimDriver.cpp
+@@ -1,4 +1,5 @@
+ #include "SimDriver.h"
++#include "gpg/core/utils/Logging.h"
+ #include "legacy/math/X87Math.h"
+ #include "platform/X87Precision.h"
+ 
+@@ -830,7 +831,7 @@ void CSimDriver::FinalizeSyncDispatchLocked(boost::mutex::scoped_lock& lock)
+   {
+     static int sProbeSync = 0;
+     if ((++sProbeSync % 50) == 0) {
+-      if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++      if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+         std::fprintf(
+           sink,
+           "[BEATPIPE] syncProduced cur=%d syncBeat=%d pausedBy=%d gameOver=%d\n",
+@@ -883,7 +884,7 @@ void CSimDriver::ExecuteDispatchStepLocked(boost::mutex::scoped_lock& lock)
+   {
+     static int sProbeStep = 0;
+     if ((++sProbeStep % 50) == 1) {
+-      if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++      if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+         std::fprintf(sink, "[BEATPIPE] dispatchStep n=%d beat=%d\n", sProbeStep, static_cast<int>(beatToDispatch));
+         std::fclose(sink);
+       }
+@@ -1230,7 +1231,7 @@ void CSimDriver::ThreadRun()
+         sLastProgressBeat = progressBeat;
+         sLastProgressCycles = nowCycles;
+       } else if (
+-        sDumpsTaken < 3 && mSimThread != nullptr
++        gpg::LogDiagnosticsEnabled() && sDumpsTaken < 3 && mSimThread != nullptr
+         && gpg::time::CyclesToMilliseconds(nowCycles - sLastProgressCycles) > 15000.0f
+       ) {
+         ++sDumpsTaken;
+@@ -1260,7 +1261,7 @@ void CSimDriver::ThreadRun()
+ #endif
+             frame.AddrStack.Mode = AddrModeFlat;
+             frame.AddrFrame.Mode = AddrModeFlat;
+-            if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++            if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+               std::fprintf(
+                 sink,
+                 "[SIMSTALL] dispatchBeat=%d state=%d eip=0x%08llx\n",
+@@ -1326,7 +1327,7 @@ void CSimDriver::ThreadRun()
+         int availableBeat = 0;
+         mClientManager->GetPartiallyQueuedBeat(partiallyQueuedBeat);
+         mClientManager->GetAvailableBeat(availableBeat);
+-        if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++        if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+           std::fprintf(
+             sink,
+             "[BEATPIPE] issueThread lastSync=%lld outstanding=%u syncQ=%u nextIssue=%d lastDeq=%d "
+@@ -1652,7 +1653,7 @@ void CSimDriver::PromoteToDispatchingWhenBeatAvailable(const int beatQuerySeed)
+   {
+     static int sProbePromote = 0;
+     if ((++sProbePromote % 50) == 0 || willPromote) {
+-      if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++      if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+         std::fprintf(
+           sink,
+           "[BEATPIPE] promote n=%d avail=%d dispatchBeat=%d promote=%d\n",
+diff --git a/src/sdk/moho/unit/core/Unit.cpp b/src/sdk/moho/unit/core/Unit.cpp
+index 3685657a..3551c692 100644
+--- a/src/sdk/moho/unit/core/Unit.cpp
++++ b/src/sdk/moho/unit/core/Unit.cpp
+@@ -11679,7 +11679,7 @@ int moho::cfunc_CreateUnitHPRL(LuaPlus::LuaState* const state)
+   {
+     static int sProbeSpawn = 0;
+     if ((++sProbeSpawn % 1) == 0) {
+-      if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++      if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+         std::fprintf(
+           sink,
+           "[SCENSPAWN] n=%d bp=%s entId=0x%08x\n",
 diff --git a/src/sdk/moho/unit/core/UnitWeapon.cpp b/src/sdk/moho/unit/core/UnitWeapon.cpp
-index fe52cc9f..673b0951 100644
+index ab7c98be..ce1e5534 100644
 --- a/src/sdk/moho/unit/core/UnitWeapon.cpp
 +++ b/src/sdk/moho/unit/core/UnitWeapon.cpp
-@@ -384,7 +384,7 @@ namespace
+@@ -382,7 +382,7 @@ namespace
        return;
      }
  
@@ -278,19 +588,44 @@ index fe52cc9f..673b0951 100644
      if (sink == nullptr) {
        return;
      }
-diff --git a/src/sdk/moho/unit/tasks/CUnitLoadUnits.cpp b/src/sdk/moho/unit/tasks/CUnitLoadUnits.cpp
-index 3ec24317..e4c5eeaa 100644
---- a/src/sdk/moho/unit/tasks/CUnitLoadUnits.cpp
-+++ b/src/sdk/moho/unit/tasks/CUnitLoadUnits.cpp
-@@ -43,7 +43,7 @@ namespace
-   // probes below append here instead. The file lands beside the executable.
-   void DiagLine(const char* const fmt, ...)
-   {
--    std::FILE* const sink = std::fopen("faf_diag.log", "a");
-+    std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
-     if (sink == nullptr) {
-       return;
-     }
+diff --git a/src/sdk/moho/unit/tasks/CBuildTaskHelper.cpp b/src/sdk/moho/unit/tasks/CBuildTaskHelper.cpp
+index 5b5b8c0b..83ea381a 100644
+--- a/src/sdk/moho/unit/tasks/CBuildTaskHelper.cpp
++++ b/src/sdk/moho/unit/tasks/CBuildTaskHelper.cpp
+@@ -1,4 +1,5 @@
+ #include "moho/unit/tasks/CBuildTaskHelper.h"
++#include "gpg/core/utils/Logging.h"
+ 
+ #include <algorithm>
+ #include <cstddef>
+@@ -313,7 +314,7 @@ namespace moho
+         static int sProbeSiloSeen = 0;
+         ++sProbeSiloSeen;
+         if ((sProbeSiloSeen % 200) == 0) {
+-          if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++          if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+             const float reqE = ownerUnit->mConsumptionData ? ownerUnit->mConsumptionData->mRequested.energy : -1.0f;
+             const float reqM = ownerUnit->mConsumptionData ? ownerUnit->mConsumptionData->mRequested.mass : -1.0f;
+             const float grantE = ownerUnit->mConsumptionData ? ownerUnit->mConsumptionData->mGranted.energy : -1.0f;
+diff --git a/src/sdk/moho/unit/tasks/CUnitGuardTask.cpp b/src/sdk/moho/unit/tasks/CUnitGuardTask.cpp
+index e1e1b026..6ab07e2b 100644
+--- a/src/sdk/moho/unit/tasks/CUnitGuardTask.cpp
++++ b/src/sdk/moho/unit/tasks/CUnitGuardTask.cpp
+@@ -1,4 +1,5 @@
+ #include "moho/unit/tasks/CUnitGuardTask.h"
++#include "gpg/core/utils/Logging.h"
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -1607,7 +1608,7 @@ namespace moho
+       {
+         static int sProbeDispatch = 0;
+         if ((++sProbeDispatch % 10) == 1) {
+-          if (std::FILE* const sink = std::fopen("faf_diag.log", "a"); sink != nullptr) {
++          if (std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr); sink != nullptr) {
+             std::fprintf(
+               sink,
+               "[SILODISPATCH] n=%d owner=%p target=%p siloBuild=%d state=%d repair=%d req=%p\n",
 -- 
 2.55.0.windows.3
 

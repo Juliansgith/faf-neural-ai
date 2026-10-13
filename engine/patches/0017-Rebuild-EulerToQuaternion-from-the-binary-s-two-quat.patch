@@ -1,0 +1,102 @@
+From 5cc6c74b291076b04cc97aac6c150b76beacdcf8 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 17:48:54 +0200
+Subject: [PATCH 17/52] Rebuild EulerToQuaternion from the binary's two
+ quaternion products
+
+func_EulerToQuaternion (0x004EB590) composes yaw about Y, pitch about X
+and roll about Z -- Yaw(y) * Pitch(x) * Roll(z) -- as two generic
+quaternion products, multiplying the single-axis quaternions' zero
+lanes out rather than folding them (0x004EB5D8-0x004EB711). The
+recovered closed form had the vector lanes rotated: its x, y, z were the
+binary's z, x, y.
+
+The visible effect: FAF's StructureUnit tilts every structure on sloped
+ground with EulerToQuaternion(roll, pitch, 0) * orientation, so each
+one leaned about the wrong axis (a roll about Z came out as a roll about
+X). Found by replaying an FAF recording: the first factory's orientation
+differed from the shipped engine's from the tick it was placed.
+
+The new body keeps each instruction's operation and order, so the result
+carries the binary's bits, including the sign of zero lanes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 4c486ce5cea2598319e3035072271bc2030d5112)
+(cherry picked from commit 4150171b33a341e1ef9d9a7dfa4e0a922c495359)
+---
+ src/sdk/moho/math/MathReflection.cpp | 50 ++++++++++++++++++++++------
+ 1 file changed, 39 insertions(+), 11 deletions(-)
+
+diff --git a/src/sdk/moho/math/MathReflection.cpp b/src/sdk/moho/math/MathReflection.cpp
+index b3d12596..ef80c4db 100644
+--- a/src/sdk/moho/math/MathReflection.cpp
++++ b/src/sdk/moho/math/MathReflection.cpp
+@@ -156,7 +156,18 @@ namespace moho
+    * Address: 0x004EB590 (FUN_004EB590, func_EulerToQuaternion)
+    *
+    * What it does:
+-   * Converts Euler roll/pitch/yaw lanes into one quaternion orientation.
++   * Converts Euler roll/pitch/yaw lanes into one quaternion orientation:
++   * yaw about Y, then pitch about X, then roll about Z -
++   * `Yaw(y) * Pitch(x) * Roll(z)`, scalar in lane 0.
++   *
++   * The binary forms this as two generic quaternion products and multiplies
++   * the single-axis quaternions' zero lanes out instead of folding them
++   * (0x004EB5D8-0x004EB711); every line below keeps one instruction's
++   * operation and order, so the result carries the same bits (and the same
++   * -0.0/NaN behaviour). The earlier closed form had the vector lanes rotated
++   * (its x, y, z were the binary's z, x, y), so FAF's StructureUnit terrain
++   * tilt (`EulerToQuaternion(roll, pitch, 0) * orientation`) turned every
++   * sloped structure about the wrong axis.
+    */
+   Wm3::Quaternionf EulerToQuaternion(const VEulers3& orientation)
+   {
+@@ -164,18 +175,35 @@ namespace moho
+     const float halfPitch = orientation.p * 0.5f;
+     const float halfYaw = orientation.y * 0.5f;
+ 
+-    const float rollCos = msvc8::cos(halfRoll);
+-    const float rollSin = msvc8::sin(halfRoll);
+-    const float pitchCos = msvc8::cos(halfPitch);
+-    const float pitchSin = msvc8::sin(halfPitch);
+-    const float yawCos = msvc8::cos(halfYaw);
+-    const float yawSin = msvc8::sin(halfYaw);
++    const float cr = msvc8::cos(halfRoll);
++    const float sr = msvc8::sin(halfRoll);
++    const float cp = msvc8::cos(halfPitch);
++    const float sp = msvc8::sin(halfPitch);
++    const float cy = msvc8::cos(halfYaw);
++    const float sy = msvc8::sin(halfYaw);
++    const float zero = 0.0f;
++
++    // q1 = Yaw(y) * Pitch(x): lanes (w, x, y, z) = (a, b, d, c).
++    const float sp0 = sp * zero;
++    const float cp0 = cp * zero;
++    const float cy0 = cy * zero;
++    const float sy0 = sy * zero;
++    const float a = ((cy * cp) - sp0) - sy0;
++    const float b = ((sp * cy) + cp0) + sy0;
++    const float c = (cy0 + cp0) - (sy * sp);
++    const float d = ((sy * cp) + cy0) + sp0;
++
++    // q1 * Roll(z), roll = (cr, 0, 0, sr).
++    const float b0 = b * zero;
++    const float d0 = d * zero;
++    const float a0 = a * zero;
++    const float c0 = c * zero;
+ 
+     Wm3::Quaternionf orientationOut{};
+-    orientationOut.w = (yawCos * pitchCos * rollCos) + (yawSin * pitchSin * rollSin);
+-    orientationOut.x = (yawCos * pitchCos * rollSin) - (yawSin * pitchSin * rollCos);
+-    orientationOut.y = (pitchSin * yawCos * rollCos) + (yawSin * pitchCos * rollSin);
+-    orientationOut.z = (yawSin * pitchCos * rollCos) - (pitchSin * yawCos * rollSin);
++    orientationOut.w = (((a * cr) - b0) - d0) - (c * sr);
++    orientationOut.x = (((d * sr) + (b * cr)) + a0) - c0;
++    orientationOut.y = (((d * cr) + c0) + a0) - (b * sr);
++    orientationOut.z = (((c * cr) + (a * sr)) + b0) - d0;
+     return orientationOut;
+   }
+ 
+-- 
+2.55.0.windows.3
+

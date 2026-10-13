@@ -1,7 +1,7 @@
-From d1c20297a19c7d4e5458c5d46931b2d671cba1e2 Mon Sep 17 00:00:00 2001
+From c1cd3da5231a21a6f87fee41a26254ff7b0e1f31 Mon Sep 17 00:00:00 2001
 From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
 Date: Tue, 29 Sep 2026 15:12:39 +0200
-Subject: [PATCH 03/56] Register the user-lane SetAutoMode binder under its own
+Subject: [PATCH 03/52] Register the user-lane SetAutoMode binder under its own
  name
 
 Sim.cpp defined the user-lane global `SetAutoMode` (0x008BAD80) as
@@ -13,6 +13,7 @@ documentation.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 (cherry picked from commit 33d806314d5763bdc43ace5d09a8433c1554d492)
+(cherry picked from commit d1c20297a19c7d4e5458c5d46931b2d671cba1e2)
 ---
  src/sdk/moho/sim/Sim.cpp                       | 3 ++-
  src/sdk/moho/sim/Sim.h                         | 2 +-
@@ -20,10 +21,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  3 files changed, 6 insertions(+), 4 deletions(-)
 
 diff --git a/src/sdk/moho/sim/Sim.cpp b/src/sdk/moho/sim/Sim.cpp
-index 8a97214d..d5f4c7c6 100644
+index fac0851d..6f605d88 100644
 --- a/src/sdk/moho/sim/Sim.cpp
 +++ b/src/sdk/moho/sim/Sim.cpp
-@@ -15287,7 +15287,7 @@ int moho::cfunc_SetAutoMode(lua_State* const luaContext)
+@@ -15140,7 +15140,7 @@ int moho::cfunc_SetAutoMode(lua_State* const luaContext)
   * What it does:
   * Publishes the global user-Lua binder for `SetAutoMode`.
   */
@@ -32,7 +33,7 @@ index 8a97214d..d5f4c7c6 100644
  {
    static CScrLuaBinder binder(
      UserLuaInitSet(),
-@@ -27092,6 +27092,7 @@ namespace
+@@ -27004,6 +27004,7 @@ namespace
        (void)::moho::func_RegisterBeamBlueprint_LuaFuncDef();
        (void)::moho::func_ExecLuaInSim_LuaFuncDef();
        (void)::moho::func_SimCallback_LuaFuncDef();
@@ -41,10 +42,10 @@ index 8a97214d..d5f4c7c6 100644
        (void)::moho::func_ToggleScriptBit_LuaFuncDef();
        (void)::moho::func_SetPaused_LuaFuncDef();
 diff --git a/src/sdk/moho/sim/Sim.h b/src/sdk/moho/sim/Sim.h
-index 444dfce1..cb200dbc 100644
+index 0a6bb192..f38c313e 100644
 --- a/src/sdk/moho/sim/Sim.h
 +++ b/src/sdk/moho/sim/Sim.h
-@@ -3625,7 +3625,7 @@ namespace moho
+@@ -3626,7 +3626,7 @@ namespace moho
     * What it does:
     * Publishes the user-lane Lua binder definition for `SetAutoMode`.
     */

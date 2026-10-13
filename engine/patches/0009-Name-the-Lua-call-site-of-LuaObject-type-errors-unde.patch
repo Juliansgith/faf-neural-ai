@@ -1,7 +1,7 @@
-From 2ee204f7c02ab3c613cca223549854aa519ec49b Mon Sep 17 00:00:00 2001
+From 3a6ffaa2975ae99f3ec4217c4dbc5d4299eecb27 Mon Sep 17 00:00:00 2001
 From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
 Date: Tue, 29 Sep 2026 15:12:40 +0200
-Subject: [PATCH 09/56] Name the Lua call site of LuaObject type errors under
+Subject: [PATCH 09/52] Name the Lua call site of LuaObject type errors under
  /diag
 
 Errors such as "get as number expected but got string" raised inside engine
@@ -12,16 +12,17 @@ publishes it) and the C++ return addresses that led there. No effect without
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 (cherry picked from commit 686ed054c66077100a34391d9ea348a9b803e99b)
+(cherry picked from commit 2ee204f7c02ab3c613cca223549854aa519ec49b)
 ---
  src/sdk/lua/LuaObject.cpp      | 61 ++++++++++++++++++++++++++++++++++
  src/sdk/moho/task/CLuaTask.cpp |  9 +++++
  2 files changed, 70 insertions(+)
 
 diff --git a/src/sdk/lua/LuaObject.cpp b/src/sdk/lua/LuaObject.cpp
-index b1a87218..b67d4e87 100644
+index 3e91896e..24503822 100644
 --- a/src/sdk/lua/LuaObject.cpp
 +++ b/src/sdk/lua/LuaObject.cpp
-@@ -22058,6 +22058,65 @@ const char* LuaObject::ToString() const
+@@ -21283,6 +21283,65 @@ const char* LuaObject::ToString() const
  	return nullptr;
  }
  
@@ -87,7 +88,7 @@ index b1a87218..b67d4e87 100644
  /**
   * Address: 0x00907970 (FUN_00907970, LuaPlus::LuaObject::GetNumber)
   *
-@@ -22068,6 +22127,7 @@ double LuaObject::GetNumber() const
+@@ -21293,6 +21352,7 @@ double LuaObject::GetNumber() const
  {
  	Ensure(m_state != nullptr, "m_state");
  	if (m_object.tt != LUA_TNUMBER) {
@@ -95,7 +96,7 @@ index b1a87218..b67d4e87 100644
  		luaG_typeerror(m_state->m_state->l_G->lstate, &m_object, "get as number");
  	}
  	return static_cast<double>(m_object.value.n);
-@@ -22085,6 +22145,7 @@ float LuaObjectGetNumberAsFloat(const LuaObject* const object)
+@@ -21310,6 +21370,7 @@ float LuaObjectGetNumberAsFloat(const LuaObject* const object)
  	Ensure(object != nullptr, "object");
  	Ensure(object->m_state != nullptr, "m_state");
  	if (object->m_object.tt != LUA_TNUMBER) {
@@ -104,10 +105,10 @@ index b1a87218..b67d4e87 100644
  	}
  	return object->m_object.value.n;
 diff --git a/src/sdk/moho/task/CLuaTask.cpp b/src/sdk/moho/task/CLuaTask.cpp
-index 8275e7c1..470eec55 100644
+index 8395cda1..c1ac3ccb 100644
 --- a/src/sdk/moho/task/CLuaTask.cpp
 +++ b/src/sdk/moho/task/CLuaTask.cpp
-@@ -295,6 +295,12 @@ CLuaTask::~CLuaTask()
+@@ -266,6 +266,12 @@ CLuaTask::~CLuaTask()
  /**
   * Address: 0x004C9700 (FUN_004C9700, ?Execute@CLuaTask@Moho@@UAEHXZ)
   */
@@ -120,7 +121,7 @@ index 8275e7c1..470eec55 100644
  int CLuaTask::Execute()
  {
    LuaPlus::LuaState* const state = mLuaState;
-@@ -306,7 +312,10 @@ int CLuaTask::Execute()
+@@ -277,7 +283,10 @@ int CLuaTask::Execute()
    mExecuteDestroyedFlag = &destroyedByDtor;
  
    try {

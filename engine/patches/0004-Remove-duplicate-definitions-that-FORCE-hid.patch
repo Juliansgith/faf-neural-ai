@@ -1,7 +1,7 @@
-From b206499f742e66e040ed7b08fc7e1b4c5029f72b Mon Sep 17 00:00:00 2001
+From 68a0996d0dfa50d246414bb66b4f5752c76aeec8 Mon Sep 17 00:00:00 2001
 From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
 Date: Tue, 29 Sep 2026 15:12:39 +0200
-Subject: [PATCH 04/56] Remove duplicate definitions that /FORCE hid
+Subject: [PATCH 04/52] Remove duplicate definitions that /FORCE hid
 
 Each of these was defined twice, and /FORCE with /IGNORE:4006 let the linker
 keep one arbitrarily:
@@ -18,15 +18,16 @@ Ported onto 8977bb9d: the deleted MapImager duplicate had been retargeted to WLD
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+(cherry picked from commit b206499f742e66e040ed7b08fc7e1b4c5029f72b)
 ---
  src/sdk/moho/animation/CRotateManipulator.cpp |  8 +-------
  src/sdk/moho/console/CConCommand.cpp          |  5 +----
  src/sdk/moho/entity/Entity.cpp                | 13 +------------
- src/sdk/moho/render/MapImager.cpp             | 10 +---------
- 4 files changed, 4 insertions(+), 32 deletions(-)
+ src/sdk/moho/render/MapImager.cpp             | 11 +----------
+ 4 files changed, 4 insertions(+), 33 deletions(-)
 
 diff --git a/src/sdk/moho/animation/CRotateManipulator.cpp b/src/sdk/moho/animation/CRotateManipulator.cpp
-index 62e84c57..54490f88 100644
+index ebd6e48d..6744e780 100644
 --- a/src/sdk/moho/animation/CRotateManipulator.cpp
 +++ b/src/sdk/moho/animation/CRotateManipulator.cpp
 @@ -1171,13 +1171,7 @@ void moho::CRotateManipulatorTypeInfo::AddBase_IAniManipulator(gpg::RType* const
@@ -45,10 +46,10 @@ index 62e84c57..54490f88 100644
  
  // Phase-1 pre-registration: run these descriptor registrations ahead of
 diff --git a/src/sdk/moho/console/CConCommand.cpp b/src/sdk/moho/console/CConCommand.cpp
-index 54a3913f..e5e619f3 100644
+index 19c42f6d..b91b418b 100644
 --- a/src/sdk/moho/console/CConCommand.cpp
 +++ b/src/sdk/moho/console/CConCommand.cpp
-@@ -2032,10 +2032,7 @@ void moho::UI_DumpControlsUnderCursor(const msvc8::vector<msvc8::string>& args)
+@@ -1996,10 +1996,7 @@ void moho::UI_DumpControlsUnderCursor(const msvc8::vector<msvc8::string>& args)
   * What it does:
   * Requests application main-loop exit through the active wx app object.
   */
@@ -61,10 +62,10 @@ index 54a3913f..e5e619f3 100644
  /**
   * Address: 0x004F3C30 (FUN_004F3C30, Moho::WIN_ToggleLogDialog)
 diff --git a/src/sdk/moho/entity/Entity.cpp b/src/sdk/moho/entity/Entity.cpp
-index 73f263ba..0d14aef2 100644
+index 8937183a..5054c630 100644
 --- a/src/sdk/moho/entity/Entity.cpp
 +++ b/src/sdk/moho/entity/Entity.cpp
-@@ -7577,18 +7577,7 @@ namespace moho
+@@ -7437,18 +7437,7 @@ namespace moho
     * What it does:
     * Publishes the `MotorFallDown:Whack(nx,ny,nz,f,dobreak)` Lua binder.
     */
@@ -85,17 +86,18 @@ index 73f263ba..0d14aef2 100644
    /**
     * Address: 0x006969E0 (FUN_006969E0, cfunc_EntitySinkAway)
 diff --git a/src/sdk/moho/render/MapImager.cpp b/src/sdk/moho/render/MapImager.cpp
-index 2bbcb71d..4cffc12e 100644
+index 2af373cc..b99be1a8 100644
 --- a/src/sdk/moho/render/MapImager.cpp
 +++ b/src/sdk/moho/render/MapImager.cpp
-@@ -241,15 +241,7 @@ void MapImager::UpdateMeshStances()
+@@ -239,16 +239,7 @@ void MapImager::UpdateMeshStances()
   * Toggles global skeleton-debug rendering and mirrors that bool lane into the
   * active simulation-driver sync-filter option flag when present.
   */
 -void REN_ShowSkeletons()
 -{
--  const bool showSkeletons = !moho::ren_ShowSkeletons;
--  moho::ren_ShowSkeletons = showSkeletons;
+-  extern bool ren_ShowSkeletons;
+-  const bool showSkeletons = !ren_ShowSkeletons;
+-  ren_ShowSkeletons = showSkeletons;
 -
 -  if (ISTIDriver* const activeDriver = WLD_GetDriver(); activeDriver != nullptr) {
 -    activeDriver->SetSyncFilterOptionFlag(showSkeletons);

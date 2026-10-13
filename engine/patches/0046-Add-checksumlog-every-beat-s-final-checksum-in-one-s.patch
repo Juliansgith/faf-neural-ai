@@ -1,0 +1,59 @@
+From 4925d24ce71d49f0cab0e8230b20c134193f50f3 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 21:48:08 +0200
+Subject: [PATCH 46/52] Add /checksumlog: every beat's final checksum in one
+ small file
+
+A determinism trace cheap enough for whole games: one "<beat> <digest>" line per
+beat (the /synclog beat files trace every checksum input and slow the sim down
+several times). Used to check that performance changes leave the simulation
+bit-identical.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit f3532fe99b964912ab25b7212ad53ce7b2fa784d)
+(cherry picked from commit c35d7045a46d18759b5c0d6aeb9c0964401df6e4)
+---
+ src/sdk/moho/sim/Sim.cpp | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/src/sdk/moho/sim/Sim.cpp b/src/sdk/moho/sim/Sim.cpp
+index 93cda38f..46c24bda 100644
+--- a/src/sdk/moho/sim/Sim.cpp
++++ b/src/sdk/moho/sim/Sim.cpp
+@@ -11,6 +11,7 @@
+ #include <bit>
+ #include <cmath>
+ #include <cstdarg>
++#include <share.h>
+ #include <cstdio>
+ #include <cstddef>
+ #include <cstdarg>
+@@ -5765,6 +5766,25 @@ void Sim::Sync(const SSyncFilter& filter, SSyncData*& outSyncData)
+   }
+   Logf("beat %d final checksum: %s\n", static_cast<int>(beat), beatHash.ToString().c_str());
+ 
++  // Engine addition (not in the binary): `/checksumlog <file>` appends every beat's final checksum to
++  // <file> as one "<beat> <digest>" line -- a determinism trace cheap enough for whole games (the
++  // /synclog beat files trace every checksum input and slow the sim down several times). Flushed every
++  // beat: agent sessions end with TerminateProcess.
++  {
++    static FILE* const sChecksumLog = []() -> FILE* {
++      msvc8::vector<msvc8::string> args;
++      if (!CFG_GetArgOption("/checksumlog", 1u, &args) || args.empty()) {
++        return nullptr;
++      }
++      // _fsopen with _SH_DENYNO (fopen_s denies sharing): the file can be read while the game runs.
++      return _fsopen(args.front().c_str(), "w", _SH_DENYNO);
++    }();
++    if (sChecksumLog != nullptr) {
++      std::fprintf(sChecksumLog, "%u %s\n", beat, beatHash.ToString().c_str());
++      std::fflush(sChecksumLog);
++    }
++  }
++
+   // 0x00748311..0x00748336: the beat is published, so retire it. The
+   // advanced-this-tick latch is consumed with it, and the game-over flag the
+   // rules layer raised becomes the one the client is told about.
+-- 
+2.55.0.windows.3
+

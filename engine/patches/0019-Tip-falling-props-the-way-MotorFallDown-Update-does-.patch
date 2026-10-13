@@ -1,0 +1,323 @@
+From f003af60093f9a16a7e100418f79441a4dfb4e27 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 18:04:36 +0200
+Subject: [PATCH 19/52] Tip falling props the way MotorFallDown::Update does in
+ the binary
+
+Replaying an FAF recording, a tree knocked over by the commander
+warp-in drifted a few float ulps from the shipped engine's within 40
+ticks. MotorFallDown::Update (0x00695180) differed from the binary in
+four places:
+
+- the target up axis: the binary keeps sin/cos of the fall direction
+  and cos of the elevation on the x87 stack (0x00695397-0x006953B1), so
+  its x and z lanes are one rounding of the product of the unrounded
+  transcendentals; the recovery multiplied float-rounded sinf/cosf
+  results. New msvc8::SinTimesCos / CosTimesCos helpers (x86 inline,
+  x64 in X87Math64.asm) do the fused form under 24-bit precision;
+- the rotation delta: the binary uses the shortest-arc helper
+  COORDS_Tilt shares (FUN_0050CB50), not a (1 + dot, cross) quaternion
+  normalized by Wm3;
+- the fall-direction flip wraps into [-pi, pi] with fmod
+  (FUN_0062FB50), not into [0, 2pi) with a loop;
+- the delta * orientation product keeps the binary's association order
+  and FUN_004EDAA0's normalize, which leaves a degenerate quaternion
+  alone instead of zeroing it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 781a3fe9e7a0e6f2c9cecc7b4f95149db4a8e1da)
+(cherry picked from commit bf31419599cdc6b5428303328d29a526307074ce)
+---
+ src/sdk/legacy/math/X87Math.cpp       | 54 ++++++++++++++++
+ src/sdk/legacy/math/X87Math.h         | 10 +++
+ src/sdk/legacy/math/X87Math64.asm     | 42 +++++++++++++
+ src/sdk/moho/entity/MotorFallDown.cpp | 88 ++++++++++++++++-----------
+ 4 files changed, 159 insertions(+), 35 deletions(-)
+
+diff --git a/src/sdk/legacy/math/X87Math.cpp b/src/sdk/legacy/math/X87Math.cpp
+index 9d485cdf..7d36fd53 100644
+--- a/src/sdk/legacy/math/X87Math.cpp
++++ b/src/sdk/legacy/math/X87Math.cpp
+@@ -9,6 +9,8 @@ extern "C" float __cdecl msvc8_x87_sinf(float x);
+ extern "C" float __cdecl msvc8_x87_cosf(float x);
+ extern "C" float __cdecl msvc8_x87_tanf(float x);
+ extern "C" float __cdecl msvc8_x87_atan2f(float y, float x);
++extern "C" float __cdecl msvc8_x87_sin_times_cos(float sinArg, float cosArg);
++extern "C" float __cdecl msvc8_x87_cos_times_cos(float firstArg, float secondArg);
+ #endif
+ 
+ namespace msvc8
+@@ -114,6 +116,58 @@ namespace msvc8
+     return atan2f(x, 1.0f);
+   }
+ 
++  float SinTimesCos(const float sinArg, const float cosArg) noexcept
++  {
++#if defined(_M_IX86)
++    float result;
++    unsigned short savedControl;
++    unsigned short singleControl;
++    __asm {
++      fnstcw savedControl
++      mov ax, savedControl
++      and ax, 0xFCFF       // precision control: 24 bits
++      mov singleControl, ax
++      fldcw singleControl
++      fld sinArg
++      fsin
++      fld cosArg
++      fcos
++      fmulp st(1), st(0)   // the unrounded products, rounded once to single
++      fstp result
++      fldcw savedControl
++    }
++    return result;
++#else
++    return msvc8_x87_sin_times_cos(sinArg, cosArg);
++#endif
++  }
++
++  float CosTimesCos(const float firstArg, const float secondArg) noexcept
++  {
++#if defined(_M_IX86)
++    float result;
++    unsigned short savedControl;
++    unsigned short singleControl;
++    __asm {
++      fnstcw savedControl
++      mov ax, savedControl
++      and ax, 0xFCFF
++      mov singleControl, ax
++      fldcw singleControl
++      fld firstArg
++      fcos
++      fld secondArg
++      fcos
++      fmulp st(1), st(0)
++      fstp result
++      fldcw savedControl
++    }
++    return result;
++#else
++    return msvc8_x87_cos_times_cos(firstArg, secondArg);
++#endif
++  }
++
+   float asinf(const float x) noexcept
+   {
+     return static_cast<float>(std::asin(static_cast<double>(x)));
+diff --git a/src/sdk/legacy/math/X87Math.h b/src/sdk/legacy/math/X87Math.h
+index 64559dcc..82a21164 100644
+--- a/src/sdk/legacy/math/X87Math.h
++++ b/src/sdk/legacy/math/X87Math.h
+@@ -36,6 +36,16 @@ namespace msvc8
+   [[nodiscard]] float atanf(float x) noexcept;
+   [[nodiscard]] float atan2f(float y, float x) noexcept;
+ 
++  /**
++   * `sin(a) * cos(b)` and `cos(a) * cos(b)` as the binary forms them when both
++   * factors stay on the x87 stack (e.g. MotorFallDown::Update, 0x00695397):
++   * the two unrounded transcendental results are multiplied and the product is
++   * rounded to single once. Multiplying the float-rounded `sinf`/`cosf` results
++   * rounds twice and can land one float away.
++   */
++  [[nodiscard]] float SinTimesCos(float sinArg, float cosArg) noexcept;
++  [[nodiscard]] float CosTimesCos(float firstArg, float secondArg) noexcept;
++
+   /**
+    * The remaining float functions go through the CRT's double routine and
+    * round once, which is what the x86 CRT's own float overloads do; x64's CRT
+diff --git a/src/sdk/legacy/math/X87Math64.asm b/src/sdk/legacy/math/X87Math64.asm
+index 98128f0a..ccd740da 100644
+--- a/src/sdk/legacy/math/X87Math64.asm
++++ b/src/sdk/legacy/math/X87Math64.asm
+@@ -51,4 +51,46 @@ msvc8_x87_atan2f PROC
+     ret
+ msvc8_x87_atan2f ENDP
+ 
++; float msvc8_x87_sin_times_cos(float a, float b): fsin(a) * fcos(b) on the
++; unrounded results, rounded once to single (precision control forced to 24 bits
++; for the multiply; x64 threads run the x87 unit at 53).
++msvc8_x87_sin_times_cos PROC
++    movss   dword ptr [rsp+8], xmm0
++    movss   dword ptr [rsp+16], xmm1
++    fnstcw  word ptr [rsp+24]
++    mov     ax, word ptr [rsp+24]
++    and     ax, 0FCFFh
++    mov     word ptr [rsp+26], ax
++    fldcw   word ptr [rsp+26]
++    fld     dword ptr [rsp+8]
++    fsin
++    fld     dword ptr [rsp+16]
++    fcos
++    fmulp   st(1), st(0)
++    fstp    dword ptr [rsp+8]
++    fldcw   word ptr [rsp+24]
++    movss   xmm0, dword ptr [rsp+8]
++    ret
++msvc8_x87_sin_times_cos ENDP
++
++; float msvc8_x87_cos_times_cos(float a, float b): fcos(a) * fcos(b), as above.
++msvc8_x87_cos_times_cos PROC
++    movss   dword ptr [rsp+8], xmm0
++    movss   dword ptr [rsp+16], xmm1
++    fnstcw  word ptr [rsp+24]
++    mov     ax, word ptr [rsp+24]
++    and     ax, 0FCFFh
++    mov     word ptr [rsp+26], ax
++    fldcw   word ptr [rsp+26]
++    fld     dword ptr [rsp+8]
++    fcos
++    fld     dword ptr [rsp+16]
++    fcos
++    fmulp   st(1), st(0)
++    fstp    dword ptr [rsp+8]
++    fldcw   word ptr [rsp+24]
++    movss   xmm0, dword ptr [rsp+8]
++    ret
++msvc8_x87_cos_times_cos ENDP
++
+ END
+diff --git a/src/sdk/moho/entity/MotorFallDown.cpp b/src/sdk/moho/entity/MotorFallDown.cpp
+index 7ee85ebc..b94cda8f 100644
+--- a/src/sdk/moho/entity/MotorFallDown.cpp
++++ b/src/sdk/moho/entity/MotorFallDown.cpp
+@@ -104,16 +104,24 @@ namespace
+     return *static_cast<float*>(valueStorage);
+   }
+ 
+-  [[nodiscard]] float NormalizeAnglePositive(const float angleRadians) noexcept
++  /**
++   * Address: 0x0062FB50 (FUN_0062FB50)
++   *
++   * What it does:
++   * Wraps an angle into [-pi, pi]: fmod by 2pi (the float 2pi widened to
++   * double, through the CRT's x87 fprem - exact), rounded to float, then one
++   * 2pi step back into range.
++   */
++  [[nodiscard]] float WrapAngleSigned(const float angleRadians) noexcept
+   {
+-    float normalized = angleRadians;
+-    while (normalized < 0.0f) {
+-      normalized += kTwoPi;
++    const float wrapped = static_cast<float>(std::fmod(static_cast<double>(angleRadians), static_cast<double>(kTwoPi)));
++    if (-kPi > wrapped) {
++      return wrapped + kTwoPi;
+     }
+-    while (normalized >= kTwoPi) {
+-      normalized -= kTwoPi;
++    if (wrapped > kPi) {
++      return wrapped - kTwoPi;
+     }
+-    return normalized;
++    return wrapped;
+   }
+ 
+   [[nodiscard]] Wm3::Vec3f BuildCurrentFallAxis(const Wm3::Quatf& orientation) noexcept
+@@ -128,29 +136,25 @@ namespace
+     };
+   }
+ 
+-  [[nodiscard]] Wm3::Quatf BuildRotationDeltaFromAxes(const Wm3::Vec3f& targetAxisRaw, const Wm3::Vec3f& currentAxisRaw)
++  /**
++   * Address: 0x004EDAA0 (FUN_004EDAA0)
++   *
++   * What it does:
++   * Normalizes a quaternion in place: length from ((w*w + x*x) + y*y) + z*z,
++   * every lane scaled by 1/length; left untouched when the length is not above
++   * 1e-6.
++   */
++  void NormalizeQuatKeepDegenerate(Wm3::Quatf& q) noexcept
+   {
+-    Wm3::Vec3f targetAxis = targetAxisRaw;
+-    Wm3::Vec3f currentAxis = currentAxisRaw;
+-
+-    if (Wm3::Vec3f::Normalize(&targetAxis) <= 1.0e-6f || Wm3::Vec3f::Normalize(&currentAxis) <= 1.0e-6f) {
+-      return Wm3::Quatf::Identity();
+-    }
+-
+-    const float dot = Wm3::Vec3f::Dot(currentAxis, targetAxis);
+-    if (dot < -0.9999f) {
+-      Wm3::Vec3f fallbackAxis = Wm3::Vec3f::Cross(currentAxis, Wm3::Vec3f{1.0f, 0.0f, 0.0f});
+-      if (Wm3::Vec3f::LengthSq(fallbackAxis) <= 1.0e-6f) {
+-        fallbackAxis = Wm3::Vec3f::Cross(currentAxis, Wm3::Vec3f{0.0f, 0.0f, 1.0f});
+-      }
+-      Wm3::Vec3f::Normalize(&fallbackAxis);
+-      return Wm3::Quatf(0.0f, fallbackAxis.x, fallbackAxis.y, fallbackAxis.z);
++    const float length = std::sqrt((((q.w * q.w) + (q.x * q.x)) + (q.y * q.y)) + (q.z * q.z));
++    if (!(length > 1.0e-6f)) {
++      return;
+     }
+-
+-    const Wm3::Vec3f cross = Wm3::Vec3f::Cross(currentAxis, targetAxis);
+-    Wm3::Quatf delta{1.0f + dot, cross.x, cross.y, cross.z};
+-    delta.Normalize();
+-    return delta;
++    const float inverseLength = 1.0f / length;
++    q.w *= inverseLength;
++    q.x *= inverseLength;
++    q.y *= inverseLength;
++    q.z *= inverseLength;
+   }
+ 
+   /**
+@@ -306,7 +310,7 @@ namespace moho
+     if (mFallAngleRadians < 0.0f) {
+       mFallAngleRadians *= -1.0f;
+       mFallDepth *= -1.0f;
+-      mFallDirectionRadians = NormalizeAnglePositive(mFallDirectionRadians + kPi);
++      mFallDirectionRadians = WrapAngleSigned(mFallDirectionRadians + kPi);
+     }
+ 
+     if (mFallAngleRadians > kHalfPi) {
+@@ -314,18 +318,23 @@ namespace moho
+       mFallDepth = 0.0f;
+     }
+ 
++    // 0x006952A9-0x006953B1: the target up axis keeps sin/cos of the fall
++    // direction and cos of the elevation on the x87 stack, so its x and z lanes
++    // are each one rounding of the product of the unrounded results.
+     const float elevationAngle = mFallAngleRadians - kHalfPi;
+-    const float sinTilt = msvc8::cos(elevationAngle);
+     const Wm3::Vec3f targetAxis{
+-      msvc8::sin(mFallDirectionRadians) * sinTilt,
++      msvc8::SinTimesCos(mFallDirectionRadians, elevationAngle),
+       -msvc8::sin(elevationAngle),
+-      msvc8::cos(mFallDirectionRadians) * sinTilt,
++      msvc8::CosTimesCos(mFallDirectionRadians, elevationAngle),
+     };
+ 
+     VTransform pendingTransform = entity->mVarDat.mCurTransform;
+ 
++    // 0x006953B5: the same shortest-arc helper COORDS_Tilt uses (FUN_0050CB50),
++    // from the current up axis onto the target, neither normalized first.
+     const Wm3::Vec3f currentAxis = BuildCurrentFallAxis(pendingTransform.orient_);
+-    Wm3::Quatf delta = BuildRotationDeltaFromAxes(targetAxis, currentAxis);
++    Wm3::Quatf delta{};
++    (void)BuildTiltShortestArcDelta(targetAxis, &delta, currentAxis);
+ 
+     const float quatDeltaMagnitude = std::fabs(std::fabs(delta.w) - 1.0f);
+     if (quatDeltaMagnitude <= kQuatUpdateThreshold) {
+@@ -345,8 +354,17 @@ namespace moho
+       }
+     }
+ 
+-    pendingTransform.orient_ = MultiplyQuat(delta, pendingTransform.orient_);
+-    pendingTransform.orient_.Normalize();
++    // 0x0069546A-0x0069555C: delta * orientation in the binary's association
++    // order, then FUN_004EDAA0's normalize.
++    const Wm3::Quatf& d = delta;
++    const Wm3::Quatf o = pendingTransform.orient_;
++    Wm3::Quatf rotated{};
++    rotated.w = (((o.w * d.w) - (d.x * o.x)) - (d.y * o.y)) - (d.z * o.z);
++    rotated.x = (((d.y * o.z) + (d.x * o.w)) + (o.x * d.w)) - (d.z * o.y);
++    rotated.y = (((d.z * o.x) + (d.y * o.w)) + (o.y * d.w)) - (d.x * o.z);
++    rotated.z = (((d.x * o.y) + (d.z * o.w)) + (o.z * d.w)) - (d.y * o.x);
++    NormalizeQuatKeepDegenerate(rotated);
++    pendingTransform.orient_ = rotated;
+     entity->SetPendingTransform(pendingTransform, 1.0f);
+   }
+ 
+-- 
+2.55.0.windows.3
+

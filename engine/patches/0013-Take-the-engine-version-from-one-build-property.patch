@@ -1,0 +1,156 @@
+From c7dd7f0fd67ecc3c55f6321b6dd03c6d3bc64263 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 16:17:52 +0200
+Subject: [PATCH 13/52] Take the engine version from one build property
+
+The version the engine reports -- GetVersion() in Lua, and the
+"Supreme Commander v1.50.NNNN" header replays are written with and must
+match to be played back -- was hard-coded as 3764 in three places. FAF
+stamps its own release number into every executable it ships (the 3839
+build pushes 0xEFF in GetEngineVersion at 0x004D3D3F and in
+VCR_SetupReplaySession at 0x00876665), so a build running newer FAF data
+rejected every current replay and reported the wrong version to FAF's Lua.
+
+moho/misc/EngineVersion.h now holds the number, defaulting to the recovered
+binary's 3764; the MSBuild property FafEngineVersion overrides it for the
+two files that use it (e.g. /p:FafEngineVersion=3839), so changing it does
+not rebuild the whole project.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 84b31619440c823ae8f36f2269592878a595dd87)
+(cherry picked from commit 350a2e2b9ef627f7c739d4757709832c8b4d5658)
+
+Ported onto 13ce9e55: upstream 2a1d6cb0 corrected the hard-coded build from 3764 to 3835 (0xEFB) from binary evidence, so EngineVersion.h and the FafEngineVersion property now default to 3835 instead of 3764; upstream's address comments are kept.
+---
+ src/sdk/main.vcxproj                 | 12 ++++++++++--
+ src/sdk/moho/lua/SCR_String.cpp      | 10 +++++-----
+ src/sdk/moho/misc/EngineVersion.h    | 15 +++++++++++++++
+ src/sdk/moho/misc/SessionStartup.cpp |  8 +++++---
+ 4 files changed, 35 insertions(+), 10 deletions(-)
+ create mode 100644 src/sdk/moho/misc/EngineVersion.h
+
+diff --git a/src/sdk/main.vcxproj b/src/sdk/main.vcxproj
+index 26b80169..d1d2de96 100644
+--- a/src/sdk/main.vcxproj
++++ b/src/sdk/main.vcxproj
+@@ -109,6 +109,9 @@
+     <FafX64AddressLinkOptions Condition="'$(FafX64LargeAddress)' == 'full'"></FafX64AddressLinkOptions>
+     <FafX64TargetName>main_x64</FafX64TargetName>
+     <FafX64TargetName Condition="'$(FafX64LargeAddress)' != 'none'">main_x64_la</FafX64TargetName>
++    <!-- Game version the engine reports (GetVersion, replay headers); see moho\misc\EngineVersion.h.
++         3835 is the recovered binary's; FAF's releases carry their own number (e.g. 3839). -->
++    <FafEngineVersion Condition="'$(FafEngineVersion)' == ''">3835</FafEngineVersion>
+     <Wm3FoundationDir>$(FafRepoRoot)dependencies\WildMagic3p8\Foundation</Wm3FoundationDir>
+     <Wm3IncludePath>$(Wm3FoundationDir);$(Wm3FoundationDir)\Approximation;$(Wm3FoundationDir)\Collision;$(Wm3FoundationDir)\Containment;$(Wm3FoundationDir)\Controllers;$(Wm3FoundationDir)\Curves;$(Wm3FoundationDir)\Detail;$(Wm3FoundationDir)\Distance;$(Wm3FoundationDir)\Effects;$(Wm3FoundationDir)\ImageAnalysis;$(Wm3FoundationDir)\Interpolation;$(Wm3FoundationDir)\Intersection;$(Wm3FoundationDir)\Math;$(Wm3FoundationDir)\Meshes;$(Wm3FoundationDir)\Miscellaneous;$(Wm3FoundationDir)\Numerics;$(Wm3FoundationDir)\ObjectSystem;$(Wm3FoundationDir)\Physics;$(Wm3FoundationDir)\RationalArithmetic;$(Wm3FoundationDir)\SceneGraph;$(Wm3FoundationDir)\Shaders;$(Wm3FoundationDir)\SharedArrays;$(Wm3FoundationDir)\Sorting;$(Wm3FoundationDir)\Surfaces;$(Wm3FoundationDir)\System;$(Wm3FoundationDir)\Terrain;$(Wm3FoundationDir)\Tessellation;$(FafRepoRoot)dependencies\WildMagic3p8\Renderers\Dx9Renderer;$(FafRepoRoot)dependencies\WildMagic3p8\Applications</Wm3IncludePath>
+   </PropertyGroup>
+@@ -632,7 +635,9 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+     <ClCompile Include="moho\ui\CUIWorldView.cpp" />
+     <ClCompile Include="moho\ui\CUIManager.cpp" />
+     <ClCompile Include="moho\lua\SCR_Math.cpp" />
+-    <ClCompile Include="moho\lua\SCR_String.cpp" />
++    <ClCompile Include="moho\lua\SCR_String.cpp">
++      <PreprocessorDefinitions>FAF_ENGINE_VERSION=$(FafEngineVersion);%(PreprocessorDefinitions)</PreprocessorDefinitions>
++    </ClCompile>
+     <ClCompile Include="moho\audio\AudioEngine.cpp" />
+     <ClCompile Include="moho\audio\AudioReflectionHelpers.cpp" />
+     <ClCompile Include="moho\audio\SParamKeyTypeInfo.cpp" />
+@@ -1257,7 +1262,9 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+     <ClCompile Include="moho\ui\IUIManager.cpp" />
+     <ClCompile Include="moho\ui\SelectionDragger.cpp" />
+     <ClCompile Include="moho\ui\UiRuntimeTypeUpcastBridges.cpp" />
+-    <ClCompile Include="moho\misc\SessionStartup.cpp" />
++    <ClCompile Include="moho\misc\SessionStartup.cpp">
++      <PreprocessorDefinitions>FAF_ENGINE_VERSION=$(FafEngineVersion);%(PreprocessorDefinitions)</PreprocessorDefinitions>
++    </ClCompile>
+     <ClCompile Include="libpng\PngWriteRuntime.cpp">
+       <ExcludedFromBuild Condition="true">true</ExcludedFromBuild>
+     </ClCompile>
+@@ -1824,6 +1831,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+     <ClInclude Include="moho\misc\FileWaitHandleSet.h" />
+     <ClInclude Include="moho\misc\StartupHelpers.h" />
+     <ClInclude Include="moho\misc\SessionStartup.h" />
++    <ClInclude Include="moho\misc\EngineVersion.h" />
+     <ClInclude Include="moho\net\CGpgNetInterface.h" />
+     <ClInclude Include="moho\net\CLocalClient.h" />
+     <ClInclude Include="moho\net\CNetDatagramSocketImpl.h" />
+diff --git a/src/sdk/moho/lua/SCR_String.cpp b/src/sdk/moho/lua/SCR_String.cpp
+index bcfb8407..b59d6341 100644
+--- a/src/sdk/moho/lua/SCR_String.cpp
++++ b/src/sdk/moho/lua/SCR_String.cpp
+@@ -1,4 +1,5 @@
+ #include "moho/lua/SCR_String.h"
++#include "moho/misc/EngineVersion.h"
+ 
+ #include "gpg/core/containers/String.h"
+ #include "gpg/core/streams/BinaryReader.h"
+@@ -384,11 +385,10 @@ moho::CScrLuaInitForm* moho::register_STR_GetTokens_LuaFuncDef()
+  */
+ msvc8::string moho::GetEngineVersion()
+ {
+-  /// The build the engine reports (0xEFB / 3835 in the target binary;
+-  /// see FUN_004D3D30 asm `push 0xefb` under `%1.1f.%i`).
+-  constexpr int kEngineBuild = 3835;
+-
+-  return gpg::STR_Printf("%1.1f.%i", 1.5, kEngineBuild);
++  /// The build the engine reports: 0xEFB (3835) in the target binary (see
++  /// FUN_004D3D30 asm `push 0xefb` under `%1.1f.%i`); FAF's releases stamp
++  /// their own number, see moho/misc/EngineVersion.h.
++  return gpg::STR_Printf("%1.1f.%i", 1.5, kEngineBuildVersion);
+ }
+ 
+ /**
+diff --git a/src/sdk/moho/misc/EngineVersion.h b/src/sdk/moho/misc/EngineVersion.h
+new file mode 100644
+index 00000000..dea808c2
+--- /dev/null
++++ b/src/sdk/moho/misc/EngineVersion.h
+@@ -0,0 +1,15 @@
++#pragma once
++
++// The game version the engine reports: GetVersion() in Lua, and the "Supreme Commander v1.50.NNNN"
++// header that replays are written with and must match to be played back. The recovered binary says
++// 3835 (0xEFB); FAF stamps its own release number into every copy it ships (the 3839 executable pushes 0xEFF
++// in GetEngineVersion and in VCR_SetupReplaySession), so a build meant to run with newer FAF data sets
++// the MSBuild property FafEngineVersion, which defines FAF_ENGINE_VERSION for the files that use it.
++#ifndef FAF_ENGINE_VERSION
++#define FAF_ENGINE_VERSION 3835
++#endif
++
++namespace moho
++{
++  inline constexpr int kEngineBuildVersion = FAF_ENGINE_VERSION;
++} // namespace moho
+diff --git a/src/sdk/moho/misc/SessionStartup.cpp b/src/sdk/moho/misc/SessionStartup.cpp
+index 45fb50d6..5fffabf4 100644
+--- a/src/sdk/moho/misc/SessionStartup.cpp
++++ b/src/sdk/moho/misc/SessionStartup.cpp
+@@ -1,4 +1,5 @@
+ #include "moho/misc/SessionStartup.h"
++#include "moho/misc/EngineVersion.h"
+ 
+ #include <Windows.h>
+ 
+@@ -347,8 +348,9 @@ namespace moho
+     constexpr std::size_t kReplayFormatBannerBytes = sizeof(kReplayFormatBanner) - 1u;
+     constexpr double kReplayEngineVersion = 1.5;
+     /// The build the replay header advertises: 0xEFB (3835) in the target binary
+-    /// (FUN_00875B60 writer, FUN_008765E0 reader, FUN_004D3D30 GetEngineVersion).
+-    constexpr int kReplayEngineBuild = 3835;
++    /// (FUN_00875B60 writer, FUN_008765E0 reader, FUN_004D3D30 GetEngineVersion);
++    /// FAF's releases stamp their own number, see moho/misc/EngineVersion.h.
++    constexpr int kReplayEngineBuild = kEngineBuildVersion;
+     /// Terminates one army's unit-source list; no source index can reach it.
+     constexpr std::uint8_t kReplayUnitSourceListEnd = 0xFFu;
+   } // namespace
+@@ -495,7 +497,7 @@ namespace moho
+     }
+ 
+     gpg::BinaryReader replayReader(replayStream.get());
+-    const msvc8::string expectedVersion = gpg::STR_Printf("Supreme Commander v%1.2f.%4i", 1.5, kReplayEngineBuild);
++    const msvc8::string expectedVersion = gpg::STR_Printf("Supreme Commander v%1.2f.%4i", 1.5, kEngineBuildVersion);
+     msvc8::string replayVersion{};
+     replayReader.ReadString(&replayVersion);
+     if (replayVersion.view() != expectedVersion.view()) {
+-- 
+2.55.0.windows.3
+

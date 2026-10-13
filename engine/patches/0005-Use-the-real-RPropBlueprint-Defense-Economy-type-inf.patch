@@ -1,7 +1,7 @@
-From ced2c2c45c0c8c603b5af2b38c6218403d23e13e Mon Sep 17 00:00:00 2001
+From a0f62c2129eb3dbbf8abb0ade43cf63be304d8ba Mon Sep 17 00:00:00 2001
 From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
 Date: Tue, 29 Sep 2026 15:12:39 +0200
-Subject: [PATCH 05/56] Use the real RPropBlueprint Defense/Economy type infos
+Subject: [PATCH 05/52] Use the real RPropBlueprint Defense/Economy type infos
 
 RPropBlueprintTypeInfo.cpp carried fieldless same-named copies of
 RPropBlueprintDefenseTypeInfo and RPropBlueprintEconomyTypeInfo and
@@ -10,6 +10,7 @@ possibly without its fields. Use the real classes from their own files.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 (cherry picked from commit ac151d2c3119d7477df2e103a034529a0d98e0aa)
+(cherry picked from commit ced2c2c45c0c8c603b5af2b38c6218403d23e13e)
 ---
  .../blueprints/RPropBlueprintTypeInfo.cpp     | 69 +++----------------
  1 file changed, 8 insertions(+), 61 deletions(-)

@@ -1,7 +1,7 @@
-From 446a75458fc3ad2a608582ddeee43c8570100a3f Mon Sep 17 00:00:00 2001
+From c4c94abc4fa05f94041348b5c71b8a191c8a18e8 Mon Sep 17 00:00:00 2001
 From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
 Date: Tue, 29 Sep 2026 15:12:40 +0200
-Subject: [PATCH 08/56] Port FAF engine functions that FAF's Lua calls
+Subject: [PATCH 08/52] Port FAF engine functions that FAF's Lua calls
 
 FAF's Lua (game version 3839) calls engine functions that FA-Binary-Patches
 adds. Missing, they raised "attempt to call" errors:
@@ -20,20 +20,23 @@ adds. Missing, they raised "attempt to call" errors:
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 (cherry picked from commit 0bdb1efc4c2f6535bd7b08af627dbc92f3e953a8)
+(cherry picked from commit 446a75458fc3ad2a608582ddeee43c8570100a3f)
+
+Ported onto 13ce9e55: upstream (b763372f, 488f8883) now registers the sim-lane SetCommandSource, SetFocusArmy and GetDepositsAroundPoint binders itself, so this commit's duplicate sim-lane binders and their declarations are dropped. Kept: FAF's upper-case deposit field names (X1, Z1, X2, Z2, Type, Dist) in the shared body, the user-lane GetDepositsAroundPoint, SetNavigatorPersonalPosMaxDistance, the projectile functions and Unit:ForceAltFootprint.
 ---
  src/sdk/moho/ai/CAiPathNavigator.cpp          |   7 +-
- src/sdk/moho/ai/CAiPathNavigator.h            |   7 +
- .../ProjectileStartupRegistrations.cpp        | 108 ++++++++++++++
- src/sdk/moho/sim/Sim.cpp                      | 138 +++++++++++++++++-
- src/sdk/moho/sim/Sim.h                        |  41 ++++++
- src/sdk/moho/unit/core/Unit.cpp               |  39 +++++
- 6 files changed, 332 insertions(+), 8 deletions(-)
+ src/sdk/moho/ai/CAiPathNavigator.h            |   7 ++
+ .../ProjectileStartupRegistrations.cpp        | 108 ++++++++++++++++++
+ src/sdk/moho/sim/Sim.cpp                      |  87 ++++++++++++--
+ src/sdk/moho/sim/Sim.h                        |  24 ++++
+ src/sdk/moho/unit/core/Unit.cpp               |  39 +++++++
+ 6 files changed, 264 insertions(+), 8 deletions(-)
 
 diff --git a/src/sdk/moho/ai/CAiPathNavigator.cpp b/src/sdk/moho/ai/CAiPathNavigator.cpp
-index 230f6195..0741027c 100644
+index 10688070..a2c54101 100644
 --- a/src/sdk/moho/ai/CAiPathNavigator.cpp
 +++ b/src/sdk/moho/ai/CAiPathNavigator.cpp
-@@ -24,6 +24,9 @@
+@@ -26,6 +26,9 @@
  
  using namespace moho;
  
@@ -73,10 +76,10 @@ index b3d5844b..c68683b2 100644
    class Sim;
    class Unit;
 diff --git a/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp b/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
-index 1005b5ce..3d36445a 100644
+index 598e698e..e349e37d 100644
 --- a/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
 +++ b/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
-@@ -880,6 +880,110 @@ namespace moho
+@@ -843,6 +843,110 @@ namespace moho
      return &binder;
    }
  
@@ -187,7 +190,7 @@ index 1005b5ce..3d36445a 100644
    /**
     * Address: 0x006A1820 (FUN_006A1820, cfunc_ProjectileSetNewTarget)
     *
-@@ -2946,6 +3050,10 @@ namespace
+@@ -2840,6 +2944,10 @@ namespace
        (void)::moho::func_ProjectileGetLauncher_LuaFuncDef();
        (void)::moho::func_ProjectileGetTrackingTarget_LuaFuncDef();
        (void)::moho::func_ProjectileGetCurrentTargetPosition_LuaFuncDef();
@@ -199,10 +202,10 @@ index 1005b5ce..3d36445a 100644
        (void)::moho::func_ProjectileSetNewTargetGround_LuaFuncDef();
        (void)::moho::func_ProjectileSetLifetime_LuaFuncDef();
 diff --git a/src/sdk/moho/sim/Sim.cpp b/src/sdk/moho/sim/Sim.cpp
-index 93a2a990..c0b7a20c 100644
+index ace8bf4e..17ac7005 100644
 --- a/src/sdk/moho/sim/Sim.cpp
 +++ b/src/sdk/moho/sim/Sim.cpp
-@@ -23555,11 +23555,35 @@ moho::CScrLuaInitForm* moho::func_CreateResourceDeposit_LuaFuncDef()
+@@ -23403,11 +23403,35 @@ moho::CScrLuaInitForm* moho::func_CreateResourceDeposit_LuaFuncDef()
   * Reads `(x, z, radius, type)` from Lua and returns an array of deposits:
   * `{ x1, z1, x2, z2, type, dist }`.
   */
@@ -238,7 +241,7 @@ index 93a2a990..c0b7a20c 100644
  
    const float x = static_cast<float>(lua_tonumber(luaContext, 1));
    const float z = static_cast<float>(lua_tonumber(luaContext, 2));
-@@ -23573,7 +23597,6 @@ int moho::cfunc_GetDepositsAroundPoint(lua_State* const luaContext)
+@@ -23421,7 +23445,6 @@ int moho::cfunc_GetDepositsAroundPoint(lua_State* const luaContext)
  
    lua_newtable(luaContext);
  
@@ -246,7 +249,7 @@ index 93a2a990..c0b7a20c 100644
    CSimResources* const resources = sim ? sim->mSimResources.px : nullptr;
    if (!resources) {
      return 1;
-@@ -23588,17 +23611,19 @@ int moho::cfunc_GetDepositsAroundPoint(lua_State* const luaContext)
+@@ -23436,17 +23459,19 @@ int moho::cfunc_GetDepositsAroundPoint(lua_State* const luaContext)
  
      lua_pushnumber(luaContext, static_cast<lua_Number>(i + 1u));
      lua_newtable(luaContext);
@@ -272,58 +275,10 @@ index 93a2a990..c0b7a20c 100644
  
  /**
   * Address: 0x0128CC35 (the sim-lane `SessionIsReplay` body; IDA's
-@@ -23720,6 +23745,99 @@ int moho::cfunc_SetCommandSourceSim(lua_State* const luaContext)
+@@ -23648,6 +23673,51 @@ int moho::cfunc_SetCommandSourceSim(lua_State* const luaContext)
    return 0;
  }
  
-+/**
-+ * Engine addition (see Sim.h): sim-lane `SetCommandSource` binder.
-+ */
-+moho::CScrLuaInitForm* moho::func_SetCommandSourceSim_LuaFuncDef()
-+{
-+  static CScrLuaBinder binder(
-+    SimLuaInitSet(),
-+    "SetCommandSource",
-+    &moho::cfunc_SetCommandSourceSim,
-+    nullptr,
-+    "<global>",
-+    "(targetArmyIndex, sourceHumanIndex, Set or Unset)"
-+  );
-+  return &binder;
-+}
-+
-+/**
-+ * Engine addition (see Sim.h): sim-lane `SetFocusArmy` binder.
-+ */
-+moho::CScrLuaInitForm* moho::func_SetFocusArmySim_LuaFuncDef()
-+{
-+  static CScrLuaBinder binder(
-+    SimLuaInitSet(),
-+    "SetFocusArmy",
-+    &moho::cfunc_SetFocusArmySim,
-+    nullptr,
-+    "<global>",
-+    "SetFocusArmy(armyIndex)"
-+  );
-+  return &binder;
-+}
-+
-+/**
-+ * Engine addition (see Sim.h): sim-lane `GetDepositsAroundPoint` binder.
-+ */
-+moho::CScrLuaInitForm* moho::func_GetDepositsAroundPointSim_LuaFuncDef()
-+{
-+  static CScrLuaBinder binder(
-+    SimLuaInitSet(),
-+    "GetDepositsAroundPoint",
-+    &moho::cfunc_GetDepositsAroundPoint,
-+    nullptr,
-+    "<global>",
-+    "(X, Z, Radius, Type)"
-+  );
-+  return &binder;
-+}
-+
 +/**
 + * Engine addition (see Sim.h): user-lane `GetDepositsAroundPoint` binder.
 + */
@@ -335,7 +290,7 @@ index 93a2a990..c0b7a20c 100644
 +    &moho::cfunc_GetDepositsAroundPointUser,
 +    nullptr,
 +    "<global>",
-+    "(X, Z, Radius, Type)"
++    kGetDepositsAroundPointHelpText
 +  );
 +  return &binder;
 +}
@@ -372,50 +327,30 @@ index 93a2a990..c0b7a20c 100644
  /**
   * Address: 0x0074B110 (FUN_0074B110, ?SIM_FromLuaState@Moho@@YAPAVSim@1@PAVLuaState@LuaPlus@@@Z)
   *
-@@ -27125,6 +27243,12 @@ namespace
-       (void)::moho::func_SessionGetLocalCommandSource_LuaFuncDef();
-       (void)::moho::func_SessionIsReplayUser_LuaFuncDef();
-       (void)::moho::func_SessionIsReplaySim_LuaFuncDef();
+@@ -27041,6 +27111,9 @@ namespace
+       (void)::moho::func_GetTimeForProfileSim_LuaFuncDef();
+       (void)::moho::func_GetDepositsAroundPoint_LuaFuncDef();
+       (void)::moho::func_SetCommandSourceSim_LuaFuncDef();
 +      // FAF engine functions (engine additions, see Sim.h).
-+      (void)::moho::func_SetCommandSourceSim_LuaFuncDef();
-+      (void)::moho::func_SetFocusArmySim_LuaFuncDef();
-+      (void)::moho::func_GetDepositsAroundPointSim_LuaFuncDef();
 +      (void)::moho::func_GetDepositsAroundPointUser_LuaFuncDef();
 +      (void)::moho::func_SetNavigatorPersonalPosMaxDistance_LuaFuncDef();
        (void)::moho::func_SessionIsBeingRecorded_LuaFuncDef();
        (void)::moho::func_SessionIsMultiplayer_LuaFuncDef();
        (void)::moho::func_SessionIsObservingAllowed_LuaFuncDef();
 diff --git a/src/sdk/moho/sim/Sim.h b/src/sdk/moho/sim/Sim.h
-index cb200dbc..c96ad83e 100644
+index f38c313e..b05b1b17 100644
 --- a/src/sdk/moho/sim/Sim.h
 +++ b/src/sdk/moho/sim/Sim.h
-@@ -6012,6 +6012,47 @@ namespace moho
+@@ -6044,6 +6044,30 @@ namespace moho
     */
    int cfunc_SetCommandSourceSim(lua_State* luaContext);
  
-+  /**
-+   * Engine addition (FAF parity, FA-Binary-Patches section/SimSetCommandSource.cpp): publishes the
-+   * sim-lane global `SetCommandSource(targetArmyIndex, sourceIndex, set)`. The body above was
-+   * recovered from the `.exxt` section but never registered, so FAF's victory-condition and
-+   * abandoned-army code raised "attempt to call global `SetCommandSource'".
-+   */
-+  CScrLuaInitForm* func_SetCommandSourceSim_LuaFuncDef();
-+
-+  /**
-+   * Engine addition (FAF parity): publishes the sim-lane global `SetFocusArmy(index)` for the
-+   * recovered `cfunc_SetFocusArmySim` body.
-+   */
-+  CScrLuaInitForm* func_SetFocusArmySim_LuaFuncDef();
-+
 +  /**
 +   * Engine addition (FAF parity, section/SimGetDepositsAroundPoint.cpp): user-lane
 +   * `GetDepositsAroundPoint`. The user Lua state carries no Sim pointer, so this reads
 +   * `Sim::sInstance`, as FAF's `UIRegFunc` reads `g_Sim`. Deposits are static after map load.
 +   */
 +  int cfunc_GetDepositsAroundPointUser(lua_State* luaContext);
-+
-+  /** Engine addition (FAF parity): sim-lane `GetDepositsAroundPoint(x, z, radius, type)`. */
-+  CScrLuaInitForm* func_GetDepositsAroundPointSim_LuaFuncDef();
 +
 +  /** Engine addition (FAF parity): user-lane `GetDepositsAroundPoint(x, z, radius, type)`. */
 +  CScrLuaInitForm* func_GetDepositsAroundPointUser_LuaFuncDef();
@@ -438,10 +373,10 @@ index cb200dbc..c96ad83e 100644
     * Address: 0x005284D0 (FUN_005284D0, cfunc_SpecFootprints)
     *
 diff --git a/src/sdk/moho/unit/core/Unit.cpp b/src/sdk/moho/unit/core/Unit.cpp
-index fef6390c..c3b21be5 100644
+index 3551c692..80591efa 100644
 --- a/src/sdk/moho/unit/core/Unit.cpp
 +++ b/src/sdk/moho/unit/core/Unit.cpp
-@@ -676,6 +676,8 @@ namespace moho
+@@ -680,6 +680,8 @@ namespace moho
    int cfunc_UnitSetAutoMode(lua_State* luaContext);
    CScrLuaInitForm* func_UnitSetAutoMode_LuaFuncDef();
    int cfunc_UnitSetAutoModeL(LuaPlus::LuaState* state);
@@ -450,7 +385,7 @@ index fef6390c..c3b21be5 100644
    int cfunc_UnitAddBuildRestriction(lua_State* luaContext);
    CScrLuaInitForm* func_UnitAddBuildRestriction_LuaFuncDef();
    int cfunc_UnitAddBuildRestrictionL(LuaPlus::LuaState* state);
-@@ -8292,6 +8294,42 @@ int moho::cfunc_UnitSetAutoModeL(LuaPlus::LuaState* const state)
+@@ -8251,6 +8253,42 @@ int moho::cfunc_UnitSetAutoModeL(LuaPlus::LuaState* const state)
    return 0;
  }
  
@@ -493,7 +428,7 @@ index fef6390c..c3b21be5 100644
  /**
   * Address: 0x006C8120 (FUN_006C8120, cfunc_UnitAddBuildRestriction)
   *
-@@ -17799,6 +17837,7 @@ namespace
+@@ -17496,6 +17534,7 @@ namespace
        (void)::moho::func_UnitSetFireState_LuaFuncDef();
        (void)::moho::func_UnitGetFireState_LuaFuncDef();
        (void)::moho::func_UnitSetAutoMode_LuaFuncDef();

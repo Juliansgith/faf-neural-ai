@@ -1,0 +1,149 @@
+From dc180f028031c601a541ac4ff3d6a599f3bf3c2c Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Thu, 1 Oct 2026 00:28:05 +0200
+Subject: [PATCH 48/52] Build: opt-in whole-program optimization and PGO for
+ Release|Win32
+
+msbuild /p:FafWpo=<mode> selects /GL builds of the Release|Win32 engine:
+true (/GL + /LTCG), PGInstrument (an instrumented image that records a
+profile) and PGOptimize (/LTCG:PGOptimize with that profile, taken from
+/p:FafPgoDatabase=<pgd>). Without it nothing changes. The three modes
+compile identically and share an intermediate folder (Release-gl), so
+switching between them only relinks; each links into its own output
+folder (Release-ltcg, -pgi, -pgo).
+
+The /FORCE link works under LTCG now that the tree has no unresolved
+externals left; /FORCE only settles the duplicate definitions that
+/IGNORE:4006 silences. Those needed care: a plain object's definition
+wins over a library's, an IL object's did not. The first LTCG image got
+the CRT's malloc/free instead of the engine allocator's (heap corruption
+in the static initializers) and wxWidgets' WinMain instead of the
+engine's. Every file that defines a symbol defined again elsewhere
+(Global.cpp malloc/free, WinMain.cpp, MathReflection.cpp ceil, the
+zlib runtime, MPVDecoder.cpp and SofdecRuntime.cpp) is compiled
+without /GL, which restores the plain link's resolution.
+
+The /GL links keep /OPT:REF but not /OPT:ICF (MSBuild's WPO sheet
+turns it on): folding identical functions into one address is unsafe
+for recovered code that may compare addresses.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 519c7cecd381975db9396125c94a57da7814e24e)
+(cherry picked from commit 0459285d9bc2d1f5df0853c0aac69ae0ce353e44)
+
+Ported onto 13ce9e55: upstream 6ac2dba0 replaced the CRI Sofdec/MPV movie runtime with an FFmpeg player, so the MPVDecoder.cpp item and the SofdecRuntime.cpp /GL exception (both for duplicate Sofdec symbols that no longer exist) are dropped. The /GL modes are not re-verified on this base.
+---
+ src/sdk/main.vcxproj | 59 +++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 48 insertions(+), 11 deletions(-)
+
+diff --git a/src/sdk/main.vcxproj b/src/sdk/main.vcxproj
+index c6ac4dad..a602cd31 100644
+--- a/src/sdk/main.vcxproj
++++ b/src/sdk/main.vcxproj
+@@ -37,11 +37,24 @@
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+     <PlatformToolset>v143</PlatformToolset>
+-    <!-- The recovery tree still has unresolved externals, so this project links
+-         with /FORCE. That switch is ignored under whole-program optimization,
+-         where the linker fails with LNK1120 instead of emitting the image, so
+-         WPO stays off here. /O2 is unaffected. -->
+-    <WholeProgramOptimization>false</WholeProgramOptimization>
++    <!-- Whole-program optimization is opt-in through FafWpo (e.g. msbuild /p:FafWpo=true):
++           (empty)       off: every file is compiled to machine code, the fastest builds
++           true          /GL + /LTCG (incremental LTCG on x86)
++           PGInstrument  profile-guided optimization, step 1: an instrumented image that records
++                         execution counts (needs pgort140.dll beside it) into the .pgd's .pgc files
++           PGOptimize    step 2: /GL + /LTCG:PGOptimize with the trained profile ($(FafPgoDatabase))
++         All three /GL modes compile identically, so they share one intermediate folder and only the
++         link differs; each links into its own output folder.
++         The /FORCE link below works under LTCG: the tree has no unresolved externals left, so /FORCE
++         only settles the duplicate definitions that /IGNORE:4006 silences (and Foundation.lib is
++         /GL already, so the link has run as LTCG all along). Those duplicates need care. A plain
++         object's definition wins over a library's; an IL (/GL) object's did not - an LTCG image got
++         the CRT's malloc/free instead of the engine allocator's (heap corruption at start-up) and
++         wxWidgets' WinMain instead of the engine's (nothing ran). So every file that defines a
++         symbol defined again elsewhere is compiled without /GL (WholeProgramOptimization=false on
++         the item). To list the duplicates after adding code, link once without /IGNORE:4006. -->
++    <WholeProgramOptimization Condition="'$(FafWpo)' == ''">false</WholeProgramOptimization>
++    <WholeProgramOptimization Condition="'$(FafWpo)' != ''">$(FafWpo)</WholeProgramOptimization>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+@@ -122,8 +135,12 @@
+     <IncludePath>$(FafRepoRoot)src\sdk;$(FafRepoRoot)dependencies\LuaPlus_Build1081\Src\LuaPlus\include;$(FafRepoRoot)dependencies\boost_1_34_1;$(Wm3IncludePath);$(IncludePath);$(DirectXInclude)</IncludePath>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+-    <OutDir>$(FafRepoRoot)output\$(ProjectName)\$(Platform)\$(Configuration)\</OutDir>
+-    <IntDir>$(FafRepoRoot)buildstage\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
++    <FafWpoOutSuffix Condition="'$(FafWpo)' == 'true'">-ltcg</FafWpoOutSuffix>
++    <FafWpoOutSuffix Condition="'$(FafWpo)' == 'PGInstrument'">-pgi</FafWpoOutSuffix>
++    <FafWpoOutSuffix Condition="'$(FafWpo)' == 'PGOptimize'">-pgo</FafWpoOutSuffix>
++    <FafWpoIntSuffix Condition="'$(FafWpo)' != ''">-gl</FafWpoIntSuffix>
++    <OutDir>$(FafRepoRoot)output\$(ProjectName)\$(Platform)\$(Configuration)$(FafWpoOutSuffix)\</OutDir>
++    <IntDir>$(FafRepoRoot)buildstage\$(ProjectName)\$(Platform)\$(Configuration)$(FafWpoIntSuffix)\</IntDir>
+     <IncludePath>$(FafRepoRoot)src\sdk;$(FafRepoRoot)dependencies\LuaPlus_Build1081\Src\LuaPlus\include;$(FafRepoRoot)dependencies\boost_1_34_1;$(Wm3IncludePath);$(IncludePath);$(DirectXInclude)</IncludePath>
+   </PropertyGroup>
+   <!-- The x64 image is main_x64.exe so it can be staged beside the Win32
+@@ -265,6 +282,13 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+            0x1E8480). -->
+       <LargeAddressAware>true</LargeAddressAware>
+       <StackReserveSize>2000000</StackReserveSize>
++      <!-- the trained profile for FafWpo=PGOptimize, and where PGInstrument creates an empty one -->
++      <ProfileGuidedDatabase Condition="'$(FafPgoDatabase)' != ''">$(FafPgoDatabase)</ProfileGuidedDatabase>
++      <!-- The /GL modes drop unreferenced code (/OPT:REF) but never fold identical functions or
++           constants into one address (/OPT:NOICF, after the /OPT:ICF MSBuild's WPO sheet adds):
++           recovered code may compare function or data addresses. -->
++      <OptimizeReferences Condition="'$(FafWpo)' != ''">true</OptimizeReferences>
++      <AdditionalOptions Condition="'$(FafWpo)' != ''">/OPT:NOICF %(AdditionalOptions)</AdditionalOptions>
+     </Link>
+     <PostBuildEvent Condition="'$(FafStageToRunDir)' == 'true'">
+       <Message>Staging $(TargetFileName) into $(FafRunDir) for F5</Message>
+@@ -445,7 +469,11 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+     <ClCompile Include="gpg\core\streams\MemBufferStream.cpp" />
+     <ClCompile Include="gpg\core\streams\PipeStream.cpp" />
+     <ClCompile Include="gpg\core\streams\Stream.cpp" />
+-    <ClCompile Include="gpg\core\streams\ZLibDeflateRuntime.cpp" />
++    <ClCompile Include="gpg\core\streams\ZLibDeflateRuntime.cpp">
++      <!-- Not /GL (see FafWpo): defines deflateCopy, deflateSetDictionary, inflateSync, _tr_tally and
++           zlibVersion, which zlib.lib defines too. -->
++      <WholeProgramOptimization Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</WholeProgramOptimization>
++    </ClCompile>
+     <ClCompile Include="gpg\core\streams\ZLibOutputFilterStream.cpp" />
+     <ClCompile Include="gpg\core\containers\ArchiveTokenTypeInfo.cpp" />
+     <ClCompile Include="gpg\core\containers\Array2D.cpp" />
+@@ -487,7 +515,10 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+     <ClCompile Include="moho\sim\SMinMaxTypeInfo.cpp" />
+     <ClCompile Include="moho\sim\CRandomStream.cpp" />
+     <ClCompile Include="moho\sim\CMersenneTwisterTypeInfo.cpp" />
+-    <ClCompile Include="moho\math\MathReflection.cpp" />
++    <ClCompile Include="moho\math\MathReflection.cpp">
++      <!-- Not /GL (see FafWpo): defines ceil, which the CRT's import library defines too. -->
++      <WholeProgramOptimization Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</WholeProgramOptimization>
++    </ClCompile>
+     <ClCompile Include="moho\math\Vector4f.cpp" />
+     <ClCompile Include="moho\sim\CMersenneTwisterSerializer.cpp" />
+     <ClCompile Include="moho\sim\CRandomStreamTypeInfo.cpp" />
+@@ -1337,11 +1368,17 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q
+     <ClCompile Include="moho\app\WEmitterWx.cpp" />
+     <ClCompile Include="moho\app\FrameDumpCommands.cpp" />
+     <ClCompile Include="moho\app\ResolutionCommands.cpp" />
+-    <ClCompile Include="moho\app\WinMain.cpp" />
++    <ClCompile Include="moho\app\WinMain.cpp">
++      <!-- Not /GL (see FafWpo): defines WinMain, which wxmswu.lib(main.obj) defines too. -->
++      <WholeProgramOptimization Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</WholeProgramOptimization>
++    </ClCompile>
+     <ClCompile Include="moho\unit\core\UserUnitTypeInfo.cpp" />
+     <ClCompile Include="moho\sim\ESpecialFileTypeTypeInfo.cpp" />
+     <ClCompile Include="moho\sim\IdPool.cpp" />
+-    <ClCompile Include="gpg\core\utils\Global.cpp" />
++    <ClCompile Include="gpg\core\utils\Global.cpp">
++      <!-- Not /GL (see FafWpo): defines malloc and free, which the CRT's import library defines too. -->
++      <WholeProgramOptimization Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</WholeProgramOptimization>
++    </ClCompile>
+     <ClCompile Include="gpg\core\utils\Logging.cpp" />
+     <ClCompile Include="..\..\dependencies\boost_1_34_1\libs\thread\src\barrier.cpp">
+       <ObjectFileName>$(IntDir)boost_thread_barrier.obj</ObjectFileName>
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,928 @@
+From 103e52058b63797c9a1ca6e0448f98993827f25c Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 7 Oct 2026 10:23:02 +0200
+Subject: [PATCH 50/52] LuaPlus call helpers restore the stack top by any path
+
+lua_call raises script errors as C++ exceptions (fba488d1), so the 84 LuaFunction helpers' trailing lua_settop
+never ran after one: every script error left its message on the stack. A game with ~1,500 OnIntelChange errors
+drove the sim's Lua stack past the 2048-slot API limit, after which lua_checkstack failed for everyone (the
+agent bridge rejected every reply as 'JSON nested too deeply' from mid-game on). LuaStackTopGuard (RAII, the
+lua_State twin of LuaAutoBlock) replaces the saved top in every helper.
+
+Also: LuaPush of a bool accepts exactly bool. A pointer whose class is incomplete at the call matched none of
+the object rules and converted to bool, so the script got 'true' in place of the object; that is a compile
+error now (include the class's header at the call). nullptr pushes nil.
+
+Ported onto 8977bb9d.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+(cherry picked from commit 283fcf568aefaaf96d52ac87503953026fe2d047)
+
+Ported onto 13ce9e55: the original commit had re-saved the whole header with CRLF line endings; only its content change is applied here, keeping the repository's LF.
+---
+ src/sdk/lua/LuaObject.h | 294 ++++++++++++++++++++++++++++------------
+ 1 file changed, 209 insertions(+), 85 deletions(-)
+
+diff --git a/src/sdk/lua/LuaObject.h b/src/sdk/lua/LuaObject.h
+index 62449e06..e9407449 100644
+--- a/src/sdk/lua/LuaObject.h
++++ b/src/sdk/lua/LuaObject.h
+@@ -1342,7 +1342,20 @@ namespace LuaPlus
+ 		lua_pushlstring(L, s.c_str(), static_cast<size_t>(s.size()));
+ 	}
+ 
+-	inline void LuaPush(lua_State* L, bool v)
++	/**
++	 * Exactly bool: a pointer must never land here through the pointer-to-bool conversion. It did when its
++	 * class was incomplete at the call (RunScriptOnIntelChange pushed a forward-declared ReconBlip*, and
++	 * FAF's OnIntelChange got `true`: "attempt to call method GetSource (a nil value)", 2026-10-07).
++	 * Now such a push is a compile error: include the class's header at the call site.
++	 */
++	inline void LuaPush(lua_State* L, std::nullptr_t)
++	{
++		lua_pushnil(L);
++	}
++
++	template <class B>
++		requires std::same_as<B, bool>
++	inline void LuaPush(lua_State* L, B v)
+ 	{
+ 		lua_pushboolean(L, v ? 1 : 0);
+ 	}
+@@ -1463,6 +1476,33 @@ namespace LuaPlus
+ 	};
+ 	static_assert(sizeof(LuaAutoBlock) == 0x08, "LuaAutoBlock size must be 0x08");
+ 
++	/**
++	 * The same for a raw lua_State, for the call helpers below: the stack top is restored when the scope
++	 * leaves by any path. lua_call raises script errors as C++ exceptions, so the helpers' trailing
++	 * lua_settop never ran after one and every script error left its message on the stack. A game with
++	 * ~1,500 OnIntelChange errors drove the sim's stack past the 2048-slot API limit (lua_checkstack then
++	 * fails for everyone, e.g. the agent bridge's reply parser), 2026-10-07.
++	 */
++	class LuaStackTopGuard
++	{
++	public:
++		explicit LuaStackTopGuard(lua_State* const state)
++			: m_state(state)
++			, m_stackTop(lua_gettop(state))
++		{}
++
++		~LuaStackTopGuard() { lua_settop(m_state, m_stackTop); }
++
++		LuaStackTopGuard(const LuaStackTopGuard&) = delete;
++		LuaStackTopGuard& operator=(const LuaStackTopGuard&) = delete;
++
++		[[nodiscard]] int Top() const noexcept { return m_stackTop; }
++
++	private:
++		lua_State* m_state;
++		int m_stackTop;
++	};
++
+ 	template<class Ret = void>
+ 	class LuaFunction : public LuaObject
+ 	{
+@@ -1501,7 +1541,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call() const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_call(activeState, 0, 1);
+ 			lua_settop(activeState, savedTop);
+@@ -1516,7 +1557,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] bool Call_x_Bool() const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_call(activeState, 0, 1);
+ 			const bool result = lua_toboolean(activeState, -1) != 0;
+@@ -1533,7 +1575,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_Bool(const bool value) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushboolean(activeState, value ? 1 : 0);
+ 			lua_call(activeState, 1, 1);
+@@ -1549,7 +1592,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_Int(const int value) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(value));
+ 			lua_call(activeState, 1, 1);
+@@ -1565,7 +1609,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_Object(const LuaObject& value) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			value.PushStack(activeState);
+ 			lua_call(activeState, 1, 1);
+@@ -1581,7 +1626,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_Int2(const int value0, const int value1) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(value0));
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(value1));
+@@ -1598,7 +1644,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_Num2(const float value0, const float value1) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(value0));
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(value1));
+@@ -1615,7 +1662,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_Str3(const char* value0, const char* value1, const char* value2) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushstring(activeState, value0);
+ 			lua_pushstring(activeState, value1);
+@@ -1633,7 +1681,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] lua_Number Call_Int_Num(const int value) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(value));
+ 			lua_call(activeState, 1, 1);
+@@ -1651,7 +1700,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_IntStr(const int value, const char* text) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(value));
+ 			lua_pushstring(activeState, text);
+@@ -1668,7 +1718,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_FalseStr(const char* text) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushboolean(activeState, 0);
+ 			lua_pushstring(activeState, text);
+@@ -1685,7 +1736,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectStr(const LuaObject& objectArg, const char* textArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushstring(activeState, textArg);
+@@ -1702,7 +1754,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectBool(const LuaObject& objectArg, const bool boolArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushboolean(activeState, boolArg ? 1 : 0);
+@@ -1719,7 +1772,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_StrFalseStr2(const char* value0, const char* value1, const char* value2) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushstring(activeState, value0);
+ 			lua_pushboolean(activeState, 0);
+@@ -1738,7 +1792,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] const char* Call_Object_Str(const LuaObject& objectArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_call(activeState, 1, 1);
+@@ -1756,7 +1811,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] bool Call_Object_bool(const LuaObject& objectArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_call(activeState, 1, 1);
+@@ -1774,7 +1830,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectNum(const LuaObject& objectArg, const lua_Number numberArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushnumber(activeState, numberArg);
+@@ -1791,7 +1848,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_StrObject(const char* textArg, const LuaObject& objectArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushstring(activeState, textArg);
+ 			objectArg.PushStack(activeState);
+@@ -1808,7 +1866,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] lua_Number Call_Uint_Num(const unsigned int value) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(value));
+ 			lua_call(activeState, 1, 1);
+@@ -1826,7 +1885,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] lua_Number Call_Obj_Num(const LuaObject& objectArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_call(activeState, 1, 1);
+@@ -1844,7 +1904,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectChar(const LuaObject& objectArg, const int charValue) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(charValue));
+@@ -1861,7 +1922,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] int Call_Object_Int(const LuaObject& objectArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_call(activeState, 1, 1);
+@@ -1879,7 +1941,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_IntObject(const int intArg, const LuaObject& objectArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(intArg));
+ 			objectArg.PushStack(activeState);
+@@ -1896,7 +1959,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectStr2(const LuaObject& objectArg, const char* text0, const char* text1) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushstring(activeState, text0);
+@@ -1914,7 +1978,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectEnt(const LuaObject& objectArg, const LuaObject* entityLuaObject) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			if (entityLuaObject) {
+@@ -1935,7 +2000,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] LuaObject Call_True_Obj() const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushboolean(activeState, 1);
+ 			lua_call(activeState, 1, 1);
+@@ -1953,7 +2019,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_Obj2(const LuaObject& objectArg0, const LuaObject& objectArg1) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg0.PushStack(activeState);
+ 			objectArg1.PushStack(activeState);
+@@ -1970,7 +2037,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] LuaObject Call_Obj() const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_call(activeState, 0, 1);
+ 			LuaObject result{LuaStackObject(GetActiveState(), -1)};
+@@ -1987,7 +2055,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] bool Call_ObjectStr_Bool(const LuaObject& objectArg, const char* textArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushstring(activeState, textArg);
+@@ -2006,7 +2075,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_String(const std::string& textArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushlstring(activeState, textArg.c_str(), static_cast<size_t>(textArg.size()));
+ 			lua_call(activeState, 1, 1);
+@@ -2022,7 +2092,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] bool Call_ObjectBool_Bool(const LuaObject& objectArg, const bool boolArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushboolean(activeState, boolArg ? 1 : 0);
+@@ -2041,7 +2112,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] LuaObject Call_Str_Obj(const char* textArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushstring(activeState, textArg);
+ 			lua_call(activeState, 1, 1);
+@@ -2059,7 +2131,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectStrNum(const LuaObject& objectArg, const char* textArg, const lua_Number numberArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushstring(activeState, textArg);
+@@ -2077,7 +2150,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectInt(const LuaObject& objectArg, const unsigned int intArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(intArg));
+@@ -2098,7 +2172,8 @@ namespace LuaPlus
+ 			const lua_Number numberArg1
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushnumber(activeState, numberArg0);
+@@ -2116,7 +2191,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] bool Call_ObjectInt_Bool(const LuaObject& objectArg, const int intArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(intArg));
+@@ -2140,7 +2216,8 @@ namespace LuaPlus
+ 			const char* text2
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushstring(activeState, text0);
+@@ -2159,7 +2236,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_Object2Str(const LuaObject& objectArg0, const LuaObject& objectArg1, const char* textArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg0.PushStack(activeState);
+ 			objectArg1.PushStack(activeState);
+@@ -2183,7 +2261,8 @@ namespace LuaPlus
+ 			const char* mapName
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushstring(activeState, protocol);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(port));
+@@ -2203,7 +2282,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_StringBool(const std::string& textArg, const bool boolArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushlstring(activeState, textArg.c_str(), static_cast<size_t>(textArg.size()));
+ 			lua_pushboolean(activeState, boolArg ? 1 : 0);
+@@ -2220,7 +2300,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] bool Call_Obj2_Bool(const LuaObject& objectArg0, const LuaObject& objectArg1) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg0.PushStack(activeState);
+ 			objectArg1.PushStack(activeState);
+@@ -2239,7 +2320,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_StrObject2(const char* textArg, const LuaObject& objectArg0, const LuaObject& objectArg1) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushstring(activeState, textArg);
+ 			objectArg0.PushStack(activeState);
+@@ -2257,7 +2339,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] LuaObject Call_StrBool_Obj(const char* textArg, const bool boolArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushstring(activeState, textArg);
+ 			lua_pushboolean(activeState, boolArg ? 1 : 0);
+@@ -2276,7 +2359,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] bool Call_ObjScrobj_Bool(const LuaObject& objectArg, const LuaObject* scriptObjectLuaArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			if (scriptObjectLuaArg) {
+@@ -2299,7 +2383,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_BoolString(const bool boolArg, const std::string& textArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushboolean(activeState, boolArg ? 1 : 0);
+ 			lua_pushlstring(activeState, textArg.c_str(), static_cast<size_t>(textArg.size()));
+@@ -2316,7 +2401,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] LuaObject Call_Object_Obj(const LuaObject& objectArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_call(activeState, 1, 1);
+@@ -2338,7 +2424,8 @@ namespace LuaPlus
+ 			const LuaObject& objectArg1
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg0.PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(intArg));
+@@ -2361,7 +2448,8 @@ namespace LuaPlus
+ 			const lua_Number value3
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, value0);
+ 			lua_pushnumber(activeState, value1);
+@@ -2386,7 +2474,8 @@ namespace LuaPlus
+ 			const LuaObject& objectArg2
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg0.PushStack(activeState);
+ 			objectArg1.PushStack(activeState);
+@@ -2404,7 +2493,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectString(const LuaObject& objectArg, const std::string& textArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushlstring(activeState, textArg.c_str(), static_cast<size_t>(textArg.size()));
+@@ -2421,7 +2511,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_Int3(const int arg0, const unsigned int arg1, const unsigned int arg2) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(arg0));
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(arg1));
+@@ -2439,7 +2530,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectWeap(const LuaObject& objectArg, const LuaObject* weaponLuaArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, weaponLuaArg);
+@@ -2456,7 +2548,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectUnit(const LuaObject& objectArg, const LuaObject* unitLuaArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, unitLuaArg);
+@@ -2473,7 +2566,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] bool Call_Unit_Bool(const LuaObject& objectArg, const LuaObject* unitLuaArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, unitLuaArg);
+@@ -2492,7 +2586,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] bool Call_ObjectWeap_Bool(const LuaObject& objectArg, const LuaObject* weaponLuaArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, weaponLuaArg);
+@@ -2516,7 +2611,8 @@ namespace LuaPlus
+ 			const lua_Number numberArg1
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, unitLuaArg);
+@@ -2535,7 +2631,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] LuaObject Call_Obj2_Obj(const LuaObject& objectArg0, const LuaObject& objectArg1) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg0.PushStack(activeState);
+ 			objectArg1.PushStack(activeState);
+@@ -2554,7 +2651,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectWeakent(const LuaObject& objectArg, const LuaObject* weakEntityLuaArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, weakEntityLuaArg);
+@@ -2571,7 +2669,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectUnit2(const LuaObject& objectArg, const LuaObject* unitLuaArg0, const LuaObject* unitLuaArg1) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, unitLuaArg0);
+@@ -2589,7 +2688,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_GPGNetGame(const char* value) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushstring(activeState, "GPGNetGame");
+ 			lua_pushstring(activeState, value);
+@@ -2611,7 +2711,8 @@ namespace LuaPlus
+ 			const lua_Number numberArg
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, entityLuaArg);
+@@ -2635,7 +2736,8 @@ namespace LuaPlus
+ 			const lua_Number numberArg
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, propLuaArg);
+@@ -2659,7 +2761,8 @@ namespace LuaPlus
+ 			const char* textArg1
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, static_cast<lua_Number>(arg0));
+ 			LuaPush(activeState, brainLuaArg);
+@@ -2678,7 +2781,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] lua_Number Call_UserunitObject_Num(const LuaObject* userUnitLuaArg, const LuaObject& objectArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			LuaPush(activeState, userUnitLuaArg);
+ 			objectArg.PushStack(activeState);
+@@ -2697,7 +2801,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] LuaObject Call_ObjectNum_Obj(const LuaObject& objectArg, const lua_Number numberArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushnumber(activeState, numberArg);
+@@ -2722,7 +2827,8 @@ namespace LuaPlus
+ 			const lua_Number numberArg2
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushstring(activeState, textArg);
+@@ -2742,7 +2848,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] bool Call_ObjectString_Bool(const LuaObject& objectArg, const std::string& textArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushlstring(activeState, textArg.c_str(), static_cast<size_t>(textArg.size()));
+@@ -2765,7 +2872,8 @@ namespace LuaPlus
+ 			const std::string& textArg
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, unitLuaArg);
+@@ -2783,7 +2891,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectIntWeakunit(const LuaObject& objectArg, const int intArg, const LuaObject* weakUnitLuaArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, weakUnitLuaArg);
+@@ -2808,7 +2917,8 @@ namespace LuaPlus
+ 			const lua_Number num3
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, objectLuaArg);
+@@ -2834,7 +2944,8 @@ namespace LuaPlus
+ 			const LuaObject* weakUnitLuaArg
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, weakUnitLuaArg);
+@@ -2857,7 +2968,8 @@ namespace LuaPlus
+ 			const std::string& textArg1
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			lua_pushlstring(activeState, textArg0.c_str(), static_cast<size_t>(textArg0.size()));
+@@ -2879,7 +2991,8 @@ namespace LuaPlus
+ 			const LuaObject* weakUnitLuaArg
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, weakUnitLuaArg);
+@@ -2904,7 +3017,8 @@ namespace LuaPlus
+ 			const bool boolArg
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushnumber(activeState, num0);
+ 			lua_pushnumber(activeState, num1);
+@@ -2925,7 +3039,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_ObjectWeakunit(const LuaObject& objectArg, const LuaObject* weakUnitLuaArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, weakUnitLuaArg);
+@@ -2947,7 +3062,8 @@ namespace LuaPlus
+ 			const LuaObject& objectArg3
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg0.PushStack(activeState);
+ 			objectArg1.PushStack(activeState);
+@@ -2966,7 +3082,8 @@ namespace LuaPlus
+ 		 */
+ 		void Call_StringObject(const std::string& textArg, const LuaObject& objectArg) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushlstring(activeState, textArg.c_str(), static_cast<size_t>(textArg.size()));
+ 			objectArg.PushStack(activeState);
+@@ -2989,7 +3106,8 @@ namespace LuaPlus
+ 			const char* textArg
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, unitLuaArg);
+@@ -3013,7 +3131,8 @@ namespace LuaPlus
+ 			const LuaObject& objectArg1
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushstring(activeState, textArg);
+ 			objectArg0.PushStack(activeState);
+@@ -3038,7 +3157,8 @@ namespace LuaPlus
+ 			const bool boolArg
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg0.PushStack(activeState);
+ 			LuaPush(activeState, objectArg1);
+@@ -3061,7 +3181,8 @@ namespace LuaPlus
+ 			const LuaObject* weakUnitLuaArg
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			objectArg.PushStack(activeState);
+ 			LuaPush(activeState, weakUnitLuaArg);
+@@ -3082,7 +3203,8 @@ namespace LuaPlus
+ 			}
+ 
+ 			lua_State* L = st->GetCState();
+-			const int savedTop = lua_gettop(L);
++			const LuaStackTopGuard savedTopGuard(L);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(L);
+ 			(LuaPush(L, args), ...);
+ 
+@@ -3183,7 +3305,8 @@ namespace LuaPlus
+ 			const int natPort
+ 		) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 
+ 			lua_pushboolean(activeState, useUdp ? 1 : 0);
+@@ -3231,7 +3354,8 @@ namespace LuaPlus
+ 		 */
+ 		[[nodiscard]] const char* operator()(const char* s) const {
+ 			lua_State* const activeState = GetActiveCState();
+-			const int savedTop = lua_gettop(activeState);
++			const LuaStackTopGuard savedTopGuard(activeState);
++			const int savedTop = savedTopGuard.Top();
+ 			PushStack(activeState);
+ 			lua_pushstring(activeState, s);
+ 			lua_call(activeState, 1, 1);
+-- 
+2.55.0.windows.3
+
