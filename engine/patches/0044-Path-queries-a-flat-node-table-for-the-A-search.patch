@@ -1,0 +1,288 @@
+From c78ff15effc08a3fe3e0e8c10ded142dd405f619 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 22:50:07 +0200
+Subject: [PATCH 44/56] Path queries: a flat node table for the A* search
+
+The path queue's A* search (PathQueue::WorkOnce, 0x007685A0) looks up the
+search record of every neighbour of every cell it expands
+(AStarSearch::FindOrCreateNode, 0x00768F40). The binary keeps those records
+in MSVC8's stdext::hash_map: a Park-Miller hash with a division, a walk along
+a sorted bucket window of individually allocated list nodes, a heap
+allocation per new record, and a free per record when the next query clears
+the table. Path searches are the largest single system on the sim thread in
+big AI games (about a fifth of it at minute 25 of an AI-vs-AI 1v1), and the
+table was the largest part of them.
+
+PathQueue's search now uses PathQueueNodeTable: records live in 1024-record
+chunks that are kept for the next query (a record never moves while the
+table holds it, as the open heap's and the parent links' raw pointers
+require), an open-addressing index maps the packed cell to its record, and
+clearing is a new generation stamp. The search only finds, inserts and
+clears - it never iterates the table - so it makes exactly the same
+decisions with either table. AStarSearch takes the table type as a new
+template parameter defaulting to the binary's hash_map (the cluster build's
+SubclusterSearch keeps it), and the new table keeps the hash_map's 0x28-byte
+footprint so ImplBase's recovered layout and offset asserts are unchanged.
+
+Measured at minute 25 of the all-AI checksum game: PathQueue::Work 14.6 %
+of the sim thread (the table: 1.6 %), down from about 19 % (the table and its
+allocations: about 7 %). Per-beat sim checksums identical to the unchanged
+build's over all 18002 beats of the 30-minute game.
+
+(cherry picked from commit b8b834e071cda11c9228e5d9c7f3b0055e03dadd)
+
+Ported onto 8977bb9d: the node table now goes into upstream's PathQueue::ImplBase (b2af9e84 renamed PathQueueImplBaseRuntime and moved the step tables into the same anonymous namespace); the class and the AStarSearch TTable parameter are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ src/sdk/gpg/core/algorithms/AStarSearch.h |  13 +-
+ src/sdk/moho/path/PathTables.cpp          | 189 +++++++++++++++++++++-
+ 2 files changed, 199 insertions(+), 3 deletions(-)
+
+diff --git a/src/sdk/gpg/core/algorithms/AStarSearch.h b/src/sdk/gpg/core/algorithms/AStarSearch.h
+index c91ae0eb..d12c8b43 100644
+--- a/src/sdk/gpg/core/algorithms/AStarSearch.h
++++ b/src/sdk/gpg/core/algorithms/AStarSearch.h
+@@ -343,13 +343,22 @@ namespace gpg
+      *   +0x00 : mNodes  (msvc8::hash_map, 0x28)
+      *   +0x28 : mOpen   (AStarOpenHeap, 0x24)
+      *   sizeof == 0x4C
++     *
++     * `TTable` (engine addition) lets an owner substitute another node table
++     * for the binary's hash_map: the search only finds, inserts and clears
++     * nodes (it never iterates the table), so any exact map with stable node
++     * addresses gives the same search. The default is the binary's.
+      */
+-    template <class TCell, class TTraits, class TCellTraits = msvc8::hash_compare<TCell>>
++    template <
++        class TCell,
++        class TTraits,
++        class TCellTraits = msvc8::hash_compare<TCell>,
++        class TTable = msvc8::hash_map<TCell, AStarNode<TCell>, TCellTraits>>
+     class AStarSearch
+     {
+     public:
+         using node_type = AStarNode<TCell>;
+-        using table_type = msvc8::hash_map<TCell, node_type, TCellTraits>;
++        using table_type = TTable;
+         using heap_type = AStarOpenHeap<TCell>;
+         using neighbour_type = AStarNeighbour<TCell>;
+ 
+diff --git a/src/sdk/moho/path/PathTables.cpp b/src/sdk/moho/path/PathTables.cpp
+index 56ba4c89..5d76b627 100644
+--- a/src/sdk/moho/path/PathTables.cpp
++++ b/src/sdk/moho/path/PathTables.cpp
+@@ -12,6 +12,8 @@
+ #include <new>
+ #include <typeinfo>
+ #include <utility>
++#include <vector>
++#include <memory>
+ 
+ #include "gpg/core/algorithms/AStarSearch.h"
+ #include "legacy/containers/Vector.h"
+@@ -68,6 +70,191 @@ namespace
+   constexpr std::int8_t kStepOffsetZ[8] = { -1, 0, 1, 0, -1, 1, 1, -1 };
+   constexpr std::uint8_t kStepGate[8] = { 0u, 0u, 0u, 0u, 3u, 6u, 12u, 9u };
+   constexpr float kStepCost[8] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.414f, 1.414f, 1.414f, 1.414f };
++
++  /**
++   * Engine addition, not recovered from the binary: the node table of the
++   * path queries' A* search, in place of the binary's MSVC8
++   * `stdext::hash_map` at ImplBase +0x00.
++   *
++   * The search looks up every neighbour of every node it expands. In the
++   * binary's table that is a Park-Miller hash (a division), a walk along a
++   * sorted bucket window of individually allocated list nodes, and a heap
++   * allocation per new node, all of it freed node by node when the next
++   * query clears the table. Path searches are the largest single cost of the
++   * sim thread in big AI games (about a fifth of it), and most of that was
++   * the table.
++   *
++   * Here nodes live in chunks that are kept for the next query (a node never
++   * moves while the table holds it, as the heap and the parent links
++   * require), and an open-addressing index maps the packed cell to its node.
++   * Clearing is O(1): a new generation stamp. The search only finds, inserts
++   * and clears, it never iterates the table, so it makes exactly the same
++   * decisions with either table.
++   *
++   * The object keeps the binary table's 0x28-byte footprint, so the recovered
++   * ImplBase layout (and its offset asserts) stays as it was; the storage is
++   * behind the first word.
++   */
++  class PathQueueNodeTable
++  {
++  public:
++    using key_type = moho::SOCellPos;
++    using mapped_type = gpg::AStarNode<moho::SOCellPos>;
++    using value_type = std::pair<moho::SOCellPos, gpg::AStarNode<moho::SOCellPos>>;
++    using iterator = value_type*;
++
++    PathQueueNodeTable()
++      : mStorage(new Storage())
++    {
++    }
++
++    ~PathQueueNodeTable()
++    {
++      delete mStorage;
++    }
++
++    PathQueueNodeTable(const PathQueueNodeTable&) = delete;
++    PathQueueNodeTable& operator=(const PathQueueNodeTable&) = delete;
++
++    [[nodiscard]] iterator end() const noexcept
++    {
++      return nullptr;
++    }
++
++    [[nodiscard]] iterator find(const key_type& cell) const noexcept
++    {
++      return mStorage->Find(moho::PackCellKey(cell));
++    }
++
++    std::pair<iterator, bool> insert(const value_type& value)
++    {
++      const std::uint32_t key = moho::PackCellKey(value.first);
++      if (value_type* const existing = mStorage->Find(key)) {
++        return {existing, false};
++      }
++      value_type* const node = mStorage->Allocate();
++      *node = value;
++      mStorage->Index(key, node);
++      return {node, true};
++    }
++
++    void clear() noexcept
++    {
++      mStorage->Clear();
++    }
++
++  private:
++    struct Storage
++    {
++      static constexpr std::uint32_t kChunkNodes = 1024u;
++
++      struct Slot
++      {
++        std::uint32_t key = 0u;
++        std::uint32_t stamp = 0u;
++        value_type* node = nullptr;
++      };
++
++      std::vector<std::unique_ptr<value_type[]>> chunks;
++      std::uint32_t used = 0u;
++      std::vector<Slot> slots;
++      std::uint32_t shift = 32u;
++      std::uint32_t stamp = 1u;
++      std::uint32_t live = 0u;
++
++      [[nodiscard]] std::size_t Home(const std::uint32_t key) const noexcept
++      {
++        return static_cast<std::size_t>((key * 2654435761u) >> shift);
++      }
++
++      [[nodiscard]] value_type* Find(const std::uint32_t key) const noexcept
++      {
++        if (slots.empty()) {
++          return nullptr;
++        }
++        const std::size_t mask = slots.size() - 1u;
++        for (std::size_t index = Home(key);; index = (index + 1u) & mask) {
++          const Slot& slot = slots[index];
++          if (slot.stamp != stamp) {
++            return nullptr;
++          }
++          if (slot.key == key) {
++            return slot.node;
++          }
++        }
++      }
++
++      [[nodiscard]] value_type* Allocate()
++      {
++        if (used == chunks.size() * kChunkNodes) {
++          chunks.push_back(std::make_unique<value_type[]>(kChunkNodes));
++        }
++        value_type* const node = &chunks[used / kChunkNodes][used % kChunkNodes];
++        ++used;
++        return node;
++      }
++
++      void Index(const std::uint32_t key, value_type* const node)
++      {
++        if ((live + 1u) * 2u > slots.size()) {
++          Grow();
++        }
++        Place(key, node);
++      }
++
++      void Place(const std::uint32_t key, value_type* const node) noexcept
++      {
++        const std::size_t mask = slots.size() - 1u;
++        for (std::size_t index = Home(key);; index = (index + 1u) & mask) {
++          Slot& slot = slots[index];
++          if (slot.stamp != stamp) {
++            slot.key = key;
++            slot.stamp = stamp;
++            slot.node = node;
++            ++live;
++            return;
++          }
++        }
++      }
++
++      void Grow()
++      {
++        const std::size_t capacity = slots.empty() ? 1024u : slots.size() * 2u;
++        std::vector<Slot> previous(capacity);
++        previous.swap(slots);
++        std::uint32_t bits = 0u;
++        while ((std::size_t{1} << bits) < capacity) {
++          ++bits;
++        }
++        shift = 32u - bits;
++        const std::uint32_t liveStamp = stamp;
++        stamp = 1u;
++        live = 0u;
++        for (const Slot& slot : previous) {
++          if (slot.stamp == liveStamp) {
++            Place(slot.key, slot.node);
++          }
++        }
++      }
++
++      void Clear() noexcept
++      {
++        used = 0u;
++        live = 0u;
++        if (++stamp == 0u) {
++          for (Slot& slot : slots) {
++            slot.stamp = 0u;
++          }
++          stamp = 1u;
++        }
++      }
++    };
++
++    Storage* mStorage;                                   // +0x00
++    [[maybe_unused]] std::uint32_t mUnusedWords[9] = {}; // +0x04 .. +0x27: the binary table's footprint
++  };
++  static_assert(sizeof(PathQueueNodeTable) == 0x28, "PathQueueNodeTable must keep the binary table's 0x28 bytes");
++
+ } // namespace
+ 
+ namespace moho
+@@ -95,7 +282,7 @@ namespace moho
+    *   +0x78 : mPathCap        traveler-supplied expansion cap
+    */
+   struct PathQueue::ImplBase
+-    : gpg::AStarSearch<SOCellPos, PathQueue::ImplBase, PathQueueCellTraits>
++    : gpg::AStarSearch<SOCellPos, PathQueue::ImplBase, PathQueueCellTraits, PathQueueNodeTable>
+   {
+     /** How one expansion ends: `ExpandNode`'s answer, which `WorkOnce` returns. */
+     enum class Step : std::int32_t
+-- 
+2.55.0.windows.3
+

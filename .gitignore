@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pt
+*.log
+.venv/
+__pycache__/
+*.pyc
+_runs/
+*.log
+!models/*.pt

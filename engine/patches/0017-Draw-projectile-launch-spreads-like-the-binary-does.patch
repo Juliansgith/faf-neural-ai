@@ -1,0 +1,327 @@
+From 09962d74ac67597c0824c26983e56ad699c261b0 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 17:09:13 +0200
+Subject: [PATCH 17/56] Draw projectile launch spreads like the binary does
+
+Replaying an FAF (3839) recording showed the rebuild's random stream
+falling behind the shipped engine's on the first beat that created a
+projectile. Entity:CreateProjectile with no direction and
+CreateProjectileAtBone draw the blueprint spreads through
+FUN_0051C400 (position), FUN_0051C510 (direction) and an inlined
+launch-speed spread; each lane is CRandomStream::FRand(-range, range)
+plus the base lane, and each draws a twister word even when its range
+is zero. The recovery:
+
+- skipped the draw for zero ranges (the commander warp-in effect's
+  direction spread: three words per projectile), which shifted every
+  later random number;
+- scaled a float-rounded word instead of multiplying the exact word
+  (MulTwisterWord), and used an approximate 2^-32 in double for the
+  position spread;
+- normalized the launch direction and the bone-forward fallback, which
+  the binary does not do (COORDS_Orient normalizes its own copy), and
+  compared the direction to zero with operator== instead of the
+  binary's 12-byte memcmp.
+
+RProjectileBlueprint now has GetRandomLaunchOffset (0x0051C400) and
+GetRandomLaunchDirection (0x0051C510), and its other spread samplers
+(lifetime, speeds, turn rate, mesh scale) use the exact FRand.
+
+Lua's Random() with no arguments (0x00759143) is the word times the
+float 2^-32 under _PC_24; the recovery multiplied by the double
+2.3283064e-10, which is not 2^-32, and came out one float low for about
+one call in a hundred.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit c4ea4198cc53cccb2fbcc5ce3a42785348ded826)
+---
+ src/sdk/moho/entity/Entity.cpp                | 97 ++++---------------
+ .../blueprints/RProjectileBlueprint.cpp       | 61 +++++++-----
+ .../blueprints/RProjectileBlueprint.h         | 19 ++++
+ src/sdk/moho/sim/Sim.cpp                      |  6 +-
+ 4 files changed, 82 insertions(+), 101 deletions(-)
+
+diff --git a/src/sdk/moho/entity/Entity.cpp b/src/sdk/moho/entity/Entity.cpp
+index 0d14aef2..58812644 100644
+--- a/src/sdk/moho/entity/Entity.cpp
++++ b/src/sdk/moho/entity/Entity.cpp
+@@ -447,44 +447,6 @@ namespace
+     return fallbackSet;
+   }
+ 
+-  [[nodiscard]] float SampleSymmetricRange(moho::CRandomStream* const random, const float range) noexcept
+-  {
+-    if (random == nullptr || range == 0.0f) {
+-      return 0.0f;
+-    }
+-
+-    const float unit = moho::CMersenneTwister::ToUnitFloat(random->twister.NextUInt32());
+-    return (-range) + (2.0f * range * unit);
+-  }
+-
+-  /**
+-   * Address: 0x0051C400 (FUN_0051C400)
+-   *
+-   * What it does:
+-   * Samples one randomized projectile spawn offset from blueprint position lanes
+-   * using symmetric per-axis spread ranges.
+-   */
+-  [[nodiscard]] Wm3::Vector3f SampleProjectileSpawnOffset(
+-    moho::CRandomStream& random,
+-    const moho::RProjectileBlueprint& blueprint
+-  ) noexcept
+-  {
+-    constexpr double kInvUInt32Range = 2.3283064e-10;
+-
+-    const auto sampleAxis = [&random](const float base, const float range) noexcept -> float {
+-      const double min = -static_cast<double>(range);
+-      const double span = static_cast<double>(range) - min;
+-      const double unit = static_cast<double>(random.twister.NextUInt32()) * kInvUInt32Range;
+-      return static_cast<float>(min + (span * unit) + static_cast<double>(base));
+-    };
+-
+-    Wm3::Vector3f out{};
+-    out.x = sampleAxis(blueprint.Physics.PositionX, blueprint.Physics.PositionXRange);
+-    out.y = sampleAxis(blueprint.Physics.PositionY, blueprint.Physics.PositionYRange);
+-    out.z = sampleAxis(blueprint.Physics.PositionZ, blueprint.Physics.PositionZRange);
+-    return out;
+-  }
+-
+   [[nodiscard]] float VectorLength(const Wm3::Vector3f& value) noexcept
+   {
+     return std::sqrt((value.x * value.x) + (value.y * value.y) + (value.z * value.z));
+@@ -562,35 +524,6 @@ namespace
+     return localBox;
+   }
+ 
+-  [[nodiscard]] Wm3::Vector3f BuildRandomProjectileOffset(
+-    moho::CRandomStream* const random,
+-    const moho::RProjectileBlueprint& blueprint
+-  ) noexcept
+-  {
+-    if (random == nullptr) {
+-      return Wm3::Vector3f{
+-        blueprint.Physics.PositionX,
+-        blueprint.Physics.PositionY,
+-        blueprint.Physics.PositionZ
+-      };
+-    }
+-
+-    return SampleProjectileSpawnOffset(*random, blueprint);
+-  }
+-
+-  [[nodiscard]] Wm3::Vector3f BuildRandomProjectileDirection(
+-    moho::CRandomStream* const random,
+-    const moho::RProjectileBlueprint& blueprint
+-  ) noexcept
+-  {
+-    Wm3::Vector3f direction{};
+-    direction.x = blueprint.Physics.DirectionX + SampleSymmetricRange(random, blueprint.Physics.DirectionXRange);
+-    direction.y = blueprint.Physics.DirectionY + SampleSymmetricRange(random, blueprint.Physics.DirectionYRange);
+-    direction.z = blueprint.Physics.DirectionZ + SampleSymmetricRange(random, blueprint.Physics.DirectionZRange);
+-    NormalizeInPlace(direction);
+-    return direction;
+-  }
+-
+   // Ground truth (`FUN_0068A6F0.c`, `cfunc_EntityCreateProjectileAtBoneL`'s
+   // only caller of this helper) rotates via the engine's scalar-first rotation
+   // matrix, not the generic `Quaternion::Rotate` (upstream WildMagic,
+@@ -608,12 +541,17 @@ namespace
+   // form exactly (`2*(wy+xz)`, `2*(wz-xy)`, `1-2*(z^2+y^2)`) -- full 3/3
+   // term match, not just the 2/3 an earlier pass here reported before
+   // resolving the split.
++  //
++  // 0x0068A8EF-0x0068A96C inline that rotation with lane 0 as the scalar,
++  // x = 2(zx + yw), y = 2(zy - xw), z = 1 - 2(yy + xx), in exactly this
++  // operation order and without normalizing the result.
+   [[nodiscard]] Wm3::Vector3f ResolveBoneForwardVector(const moho::VTransform& transform) noexcept
+   {
+-    const Wm3::Vector3f forwardAxis{0.0f, 0.0f, 1.0f};
++    const Wm3::Quaternionf& q = transform.orient_;
+     Wm3::Vector3f out{};
+-    moho::MultQuadVec(&out, &forwardAxis, &transform.orient_);
+-    NormalizeInPlace(out);
++    out.x = ((q.z * q.x) + (q.y * q.w)) * 2.0f;
++    out.y = ((q.z * q.y) - (q.x * q.w)) * 2.0f;
++    out.z = 1.0f - (((q.y * q.y) + (q.x * q.x)) * 2.0f);
+     return out;
+   }
+ 
+@@ -4458,7 +4396,8 @@ namespace moho
+       }
+       launchOffset.z = static_cast<float>(lua_tonumber(rawState, 5));
+     } else {
+-      launchOffset = BuildRandomProjectileOffset(sim ? sim->mRngState : nullptr, *projectileBlueprint);
++      // 0x0068A287: FUN_0051C400, one twister word per lane even for zero ranges.
++      launchOffset = projectileBlueprint->GetRandomLaunchOffset(sim->mRngState);
+     }
+ 
+     Wm3::Vector3f launchDirection{};
+@@ -4481,7 +4420,9 @@ namespace moho
+       }
+       launchDirection.z = static_cast<float>(lua_tonumber(rawState, 8));
+     } else {
+-      launchDirection = BuildRandomProjectileDirection(sim ? sim->mRngState : nullptr, *projectileBlueprint);
++      // 0x0068A3BA: FUN_0051C510, one twister word per lane even for zero ranges; the direction
++      // goes to COORDS_Orient as drawn (it normalizes its own copy).
++      launchDirection = projectileBlueprint->GetRandomLaunchDirection(sim->mRngState);
+     }
+ 
+     const VTransform sourceTransform = entity->GetBoneWorldTransform(-2);
+@@ -4592,16 +4533,20 @@ namespace moho
+ 
+     const VTransform launchTransform = entity->GetBoneWorldTransform(boneIndex);
+ 
+-    CRandomStream* const random = (entity->SimulationRef ? entity->SimulationRef->mRngState : nullptr);
+-    Wm3::Vector3f launchDirection = BuildRandomProjectileDirection(random, *projectileBlueprint);
++    // 0x0068A8C2-0x0068A9E7: blueprint direction spread (FUN_0051C510), the bone's forward axis when
++    // that is bitwise the zero vector (memcmp against Vector3f::ZERO at 0x0068A8E2), then the
++    // inlined launch-speed spread -- every spread draws its twister word, zero ranges included.
++    CRandomStream* const random = entity->SimulationRef->mRngState;
++    Wm3::Vector3f launchDirection = projectileBlueprint->GetRandomLaunchDirection(random);
+ 
+     const Wm3::Vector3f zero = Wm3::Vector3f::Zero();
+-    if (launchDirection == zero) {
++    if (std::memcmp(&launchDirection, &zero, sizeof(zero)) == 0) {
+       launchDirection = ResolveBoneForwardVector(launchTransform);
+     }
+ 
+     const float launchSpeed =
+-      projectileBlueprint->Physics.InitialSpeed + SampleSymmetricRange(random, projectileBlueprint->Physics.InitialSpeedRange);
++      random->FRand(-projectileBlueprint->Physics.InitialSpeedRange, projectileBlueprint->Physics.InitialSpeedRange) +
++      projectileBlueprint->Physics.InitialSpeed;
+ 
+     const CAiTarget target = MakeDefaultProjectileTarget();
+     const msvc8::string damageTypeName("Normal");
+diff --git a/src/sdk/moho/resource/blueprints/RProjectileBlueprint.cpp b/src/sdk/moho/resource/blueprints/RProjectileBlueprint.cpp
+index f8cb4635..2788d10b 100644
+--- a/src/sdk/moho/resource/blueprints/RProjectileBlueprint.cpp
++++ b/src/sdk/moho/resource/blueprints/RProjectileBlueprint.cpp
+@@ -15,33 +15,14 @@ namespace moho
+   namespace
+   {
+     /**
+-     * Address: 0x0051C510 (FUN_0051C510, func_RandomDirection)
+-     *
+-     * What it does:
+-     * Builds one randomized launch direction from blueprint direction lanes
+-     * (`DirectionX/Y/Z`) plus symmetric per-axis ranges.
++     * The spread every blueprint sampler below inlines: `CRandomStream::FRand(-range, range)`
++     * (0x0051B5C0) -- `-0.0f - range` for the low end, then x87 under `_PC_24` with the twister word
++     * multiplied unrounded -- to which the caller adds its base lane. A zero range still draws its
++     * twister word.
+      */
+-    [[nodiscard]] Wm3::Vector3f* BuildRandomDirectionVector(
+-      CRandomStream* const randomStream, Wm3::Vector3f* const destination, const RProjectileBlueprint* const blueprint
+-    )
+-    {
+-      const auto sampleSymmetricOffset = [randomStream](const float range) {
+-        const float unit = CMersenneTwister::ToUnitFloat(randomStream->twister.NextUInt32());
+-        return (-range) + ((range - (-range)) * unit);
+-      };
+-
+-      destination->x = sampleSymmetricOffset(blueprint->Physics.DirectionXRange) + blueprint->Physics.DirectionX;
+-      destination->y = sampleSymmetricOffset(blueprint->Physics.DirectionYRange) + blueprint->Physics.DirectionY;
+-      destination->z = sampleSymmetricOffset(blueprint->Physics.DirectionZRange) + blueprint->Physics.DirectionZ;
+-      return destination;
+-    }
+-
+     [[nodiscard]] float SampleSymmetricRange(CRandomStream* const randomStream, const float range)
+     {
+-      const float minValue = -range;
+-      const float maxValue = range;
+-      const float unit = CMersenneTwister::ToUnitFloat(randomStream->twister.NextUInt32());
+-      return minValue + ((maxValue - minValue) * unit);
++      return randomStream->FRand(-range, range);
+     }
+ 
+     /**
+@@ -220,6 +201,38 @@ namespace moho
+     return angularVelocity;
+   }
+ 
++  /**
++   * Address: 0x0051C400 (FUN_0051C400)
++   *
++   * What it does:
++   * Samples one launch offset: `Physics.PositionX/Y/Z` plus a symmetric
++   * `PositionX/Y/ZRange` spread per lane, drawn x, y, z.
++   */
++  Wm3::Vector3f RProjectileBlueprint::GetRandomLaunchOffset(CRandomStream* const randomStream) const
++  {
++    Wm3::Vector3f offset{};
++    offset.x = SampleSymmetricRange(randomStream, Physics.PositionXRange) + Physics.PositionX;
++    offset.y = SampleSymmetricRange(randomStream, Physics.PositionYRange) + Physics.PositionY;
++    offset.z = SampleSymmetricRange(randomStream, Physics.PositionZRange) + Physics.PositionZ;
++    return offset;
++  }
++
++  /**
++   * Address: 0x0051C510 (FUN_0051C510, func_RandomDirection)
++   *
++   * What it does:
++   * Samples one launch direction: `Physics.DirectionX/Y/Z` plus a symmetric
++   * `DirectionX/Y/ZRange` spread per lane, drawn x, y, z. Not normalized.
++   */
++  Wm3::Vector3f RProjectileBlueprint::GetRandomLaunchDirection(CRandomStream* const randomStream) const
++  {
++    Wm3::Vector3f direction{};
++    direction.x = SampleSymmetricRange(randomStream, Physics.DirectionXRange) + Physics.DirectionX;
++    direction.y = SampleSymmetricRange(randomStream, Physics.DirectionYRange) + Physics.DirectionY;
++    direction.z = SampleSymmetricRange(randomStream, Physics.DirectionZRange) + Physics.DirectionZ;
++    return direction;
++  }
++
+   /**
+    * Address: 0x0051C680 (FUN_0051C680, Moho::RProjectileBlueprint::GetRandomInitialSpeed)
+    * Mangled: ?GetRandomInitialSpeed@RProjectileBlueprint@Moho@@QBEMPAVCRandomStream@2@@Z
+diff --git a/src/sdk/moho/resource/blueprints/RProjectileBlueprint.h b/src/sdk/moho/resource/blueprints/RProjectileBlueprint.h
+index 37f5e50c..964eaea4 100644
+--- a/src/sdk/moho/resource/blueprints/RProjectileBlueprint.h
++++ b/src/sdk/moho/resource/blueprints/RProjectileBlueprint.h
+@@ -178,6 +178,25 @@ namespace moho
+      */
+     [[nodiscard]] Wm3::Vector3f GetAngularVelocity(CRandomStream* randomStream) const;
+ 
++    /**
++     * Address: 0x0051C400 (FUN_0051C400)
++     *
++     * What it does:
++     * Samples one launch offset: `Physics.PositionX/Y/Z` plus a symmetric
++     * `PositionX/Y/ZRange` spread per lane (one twister word per lane, x, y, z).
++     */
++    [[nodiscard]] Wm3::Vector3f GetRandomLaunchOffset(CRandomStream* randomStream) const;
++
++    /**
++     * Address: 0x0051C510 (FUN_0051C510, func_RandomDirection)
++     *
++     * What it does:
++     * Samples one launch direction: `Physics.DirectionX/Y/Z` plus a symmetric
++     * `DirectionX/Y/ZRange` spread per lane (one twister word per lane, x, y,
++     * z). Not normalized.
++     */
++    [[nodiscard]] Wm3::Vector3f GetRandomLaunchDirection(CRandomStream* randomStream) const;
++
+     /**
+      * Address: 0x0051C680 (FUN_0051C680, ?GetRandomInitialSpeed@RProjectileBlueprint@Moho@@QBEMPAVCRandomStream@2@@Z)
+      * Mangled: ?GetRandomInitialSpeed@RProjectileBlueprint@Moho@@QBEMPAVCRandomStream@2@@Z
+diff --git a/src/sdk/moho/sim/Sim.cpp b/src/sdk/moho/sim/Sim.cpp
+index c0b7a20c..2cf31be0 100644
+--- a/src/sdk/moho/sim/Sim.cpp
++++ b/src/sdk/moho/sim/Sim.cpp
+@@ -12412,7 +12412,11 @@ int moho::cfunc_RandomSimL(LuaPlus::LuaState* const state)
+   }
+ 
+   if (argumentCount == 0) {
+-    const double value = static_cast<double>(sim->mRngState->twister.NextUInt32()) * 2.3283064e-10;
++    // 0x00759143-0x00759165: fild the word (+2^32 when it loads negative), fmul by the float 2^-32 under
++    // _PC_24, fstp to float. The earlier `double(word) * 2.3283064e-10` used a constant that is not 2^-32
++    // and landed one float low for about one draw in a hundred.
++    constexpr float kInvTwoTo32f = 2.3283064365386962890625e-10f;
++    const float value = msvc8::MulTwisterWord(kInvTwoTo32f, sim->mRngState->twister.NextUInt32());
+     lua_pushnumber(rawState, value);
+     return 1;
+   }
+-- 
+2.55.0.windows.3
+

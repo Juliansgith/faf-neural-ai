@@ -1,0 +1,71 @@
+From ad20328f1ce93c8717171a718605316d7a3bd945 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 23:19:33 +0200
+Subject: [PATCH 47/56] Unit priority tie-break: only the forward lanes and one
+ normalisation it needs
+
+UnitMoreInLineToOther (0x0062EAC0) decides which of two equal units yields,
+from their flattened forward vectors and the direction between them. It is
+reached from Unit::IsHigherPriorityThan for every same-army candidate of the
+steering collision scan, so in blobs of identical units it runs for most
+pairs of every tick.
+
+ForwardXZ built the whole VAxes3 (nine lanes) to keep two of them; it now
+computes just vZ.x and vZ.z, with VAxes3::VAxes3's own expressions. And the
+direction a1->a2 was normalised separately from a2->a1: rounding is
+symmetric, so it is exactly the negated vector, up to the sign of zero lanes,
+which the two comparisons that consume it cannot observe (a zero lane only
+adds a signed zero to the dot product, and an all-zero product compares equal
+to 0 either way).
+
+Verified with the 30-minute all-AI checksum run (identical over all 18002
+beats).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 1ec9df5f23ecb6f2c43ea49189cb1c44e4000fbb)
+---
+ src/sdk/moho/unit/core/Unit.cpp | 21 +++++++++++++++++----
+ 1 file changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/src/sdk/moho/unit/core/Unit.cpp b/src/sdk/moho/unit/core/Unit.cpp
+index 50e0c7ab..efa07773 100644
+--- a/src/sdk/moho/unit/core/Unit.cpp
++++ b/src/sdk/moho/unit/core/Unit.cpp
+@@ -1934,9 +1934,18 @@ namespace
+   // constructor is correct.
+   [[nodiscard]] Wm3::Vector3f ForwardXZ(const Unit& unit) noexcept
+   {
+-    const moho::VAxes3 axes(unit.GetTransform().orient_);
+-    Wm3::Vector3f forward = axes.vZ;
+-    forward.y = 0.0f;
++    // `VAxes3(orient).vZ` with its y lane dropped. Only the two lanes that are
++    // kept are computed, with VAxes3::VAxes3's own expressions (0x004EC590):
++    // vZ.x = 2w*y + 2x*z, vZ.z = 1 - (2y*y + 2x*x).
++    const auto& orient = unit.GetTransform().orient_;
++    const float twoW = orient.w * 2.0f;
++    const float twoX = orient.x * 2.0f;
++    const float twoY = orient.y * 2.0f;
++    const float xx = twoX * orient.x;
++    const float yy = twoY * orient.y;
++    const float wy = twoW * orient.y;
++    const float xz = twoX * orient.z;
++    Wm3::Vector3f forward{wy + xz, 0.0f, 1.0f - (yy + xx)};
+     return Wm3::Vector3f::NormalizeOrZero(forward);
+   }
+ 
+@@ -2267,7 +2276,11 @@ namespace
+     const Wm3::Vector3f a2Forward = ForwardXZ(*a2);
+     const Wm3::Vector3f a1Forward = ForwardXZ(*a1);
+     const Wm3::Vector3f a2ToA1 = Wm3::Vector3f::NormalizeOrZero(a1->GetPosition() - a2->GetPosition());
+-    const Wm3::Vector3f a1ToA2 = Wm3::Vector3f::NormalizeOrZero(a2->GetPosition() - a1->GetPosition());
++    // The binary normalises `a2 - a1` as well. Rounding is symmetric, so that
++    // is `-a2ToA1` exactly, up to the sign of zero lanes, which the two
++    // comparisons below cannot see (a zero lane only adds a signed zero to the
++    // dot product, and an all-zero product compares equal to 0 either way).
++    const Wm3::Vector3f a1ToA2 = a2ToA1 * -1.0f;
+ 
+     const float a2Alignment = Wm3::Vector3f::Dot(a2ToA1, a2Forward);
+     const float a1Alignment = Wm3::Vector3f::Dot(a1ToA2, a1Forward);
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,3 @@
+* text=auto
+# git format-patch output must stay byte-exact for git am / git apply.
+*.patch -text

@@ -1,0 +1,795 @@
+<title>FAF Agent Network</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Saira+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Layout: a two-pane console. The tactical map of one moment sits beside the five decisions it produces;
+   the network's layers run underneath as a left-to-right pipeline of activation strips. */
+:root {
+  --bg: #e8edf0;
+  --panel: #f7f9fa;
+  --ink: #15232d;
+  --muted: #56697a;
+  --line: #c9d4db;
+  --own: #1d64ad;
+  --enemy: #c03a31;
+  --mass: #3b862d;
+  --energy: #a67c00;
+  --map: #dbe4dd;
+  --map-grid: #c2cfc6;
+  --focus: #d38b00;
+  --heat0: #f7f9fa;
+  --heat1: #1d64ad;
+  --display: "Saira Semi Condensed", "Arial Narrow", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c161d; --panel: #12202a; --ink: #d9e4eb; --muted: #8aa0af; --line: #22384a;
+    --own: #5ba8ea; --enemy: #f06a5f; --mass: #7cc95c; --energy: #e7c04a;
+    --map: #0f201a; --map-grid: #1c3329; --focus: #f2bf45; --heat0: #12202a; --heat1: #5ba8ea;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c161d; --panel: #12202a; --ink: #d9e4eb; --muted: #8aa0af; --line: #22384a;
+  --own: #5ba8ea; --enemy: #f06a5f; --mass: #7cc95c; --energy: #e7c04a;
+  --map: #0f201a; --map-grid: #1c3329; --focus: #f2bf45; --heat0: #12202a; --heat1: #5ba8ea;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 56px; display: grid; gap: 28px; }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; margin: 0; text-wrap: balance; letter-spacing: 0.01em; }
+h1 { font-size: clamp(2rem, 5vw, 2.9rem); line-height: 1.05; }
+h2 { font-size: 1.35rem; }
+h3 { font-size: 1.05rem; }
+p { margin: 0; }
+.eyebrow { font-family: var(--display); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+.lede { max-width: 68ch; color: var(--ink); }
+.muted { color: var(--muted); }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+header.top { display: grid; gap: 12px; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 4px 0 0; }
+.facts div { display: grid; gap: 0; min-width: 0; }
+.facts dt { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.facts dd { margin: 0; font-family: var(--mono); font-size: 1rem; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { font: inherit; font-size: 0.88rem; padding: 6px 12px; border: 0; background: transparent; color: var(--ink); cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--own); color: var(--panel); }
+.seg button:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.check { font-size: 0.85rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.check.ok { border-color: var(--mass); color: var(--mass); }
+.check.bad { border-color: var(--enemy); color: var(--enemy); }
+.console { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { .console { grid-template-columns: minmax(0, 1fr); } }
+.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 14px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+select, .btn { font: inherit; font-size: 0.9rem; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+select { max-width: 100%; }
+.btn { cursor: pointer; }
+.scrub { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+input[type="range"] { width: 100%; accent-color: var(--own); }
+.clock { font-family: var(--mono); font-size: 1.25rem; min-width: 4.2ch; text-align: right; }
+.mapwrap { position: relative; width: 100%; max-width: 560px; aspect-ratio: 1; justify-self: center; }
+.mapwrap canvas { width: 100%; height: 100%; display: block; border-radius: 6px; touch-action: none; }
+.tip { position: absolute; z-index: 2; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 0.82rem; line-height: 1.35; max-width: 240px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); }
+.tip b { font-family: var(--display); font-weight: 600; font-size: 0.95rem; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.82rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 10px; height: 10px; display: inline-block; border-radius: 50%; }
+.sw.own { background: var(--own); }
+.sw.enemy { background: var(--enemy); }
+.sw.ghost { border: 2px solid var(--enemy); border-radius: 2px; }
+.sw.radar { background: var(--muted); width: 6px; height: 6px; }
+.sw.infl { border: 2px solid var(--focus); background: transparent; }
+.eco { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; margin: 0; }
+@media (max-width: 420px) { .eco { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.eco div { display: grid; min-width: 0; }
+.eco dt { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.eco dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.eco .mass { color: var(--mass); }
+.eco .energy { color: var(--energy); }
+.heads { display: grid; gap: 16px; }
+.head { display: grid; gap: 6px; }
+.head header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.head .what { font-size: 0.82rem; color: var(--muted); }
+.opt { display: grid; grid-template-columns: minmax(7.5em, 11em) minmax(0, 1fr) 3.6em; align-items: center; gap: 8px; font-size: 0.88rem; }
+.opt .label { overflow-wrap: anywhere; }
+.opt .bar { height: 12px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+.opt .bar i { display: block; height: 100%; background: var(--muted); border-radius: 3px; }
+.opt.top .bar i { background: var(--own); }
+.opt.top .label { font-weight: 600; }
+.opt .pct { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; font-size: 0.82rem; }
+.teach { font-size: 0.72rem; font-weight: 600; color: var(--focus); margin-left: 6px; white-space: nowrap; }
+.closed { font-size: 0.8rem; color: var(--muted); }
+.agree { font-size: 0.78rem; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.agree.yes { border-color: var(--mass); color: var(--mass); }
+.agree.no { border-color: var(--focus); color: var(--focus); }
+section.inside { display: grid; gap: 16px; }
+.pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 960px) { .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .pipeline { grid-template-columns: minmax(0, 1fr); } }
+.stage { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.stage .dims { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); }
+.stage p { font-size: 0.86rem; }
+.stage canvas { width: 100%; display: block; border-radius: 4px; cursor: crosshair; }
+.readout { font-family: var(--mono); font-size: 0.82rem; color: var(--muted); min-height: 1.5em; overflow-wrap: anywhere; }
+.influence { display: grid; gap: 8px; }
+.influence ol { margin: 0; padding-left: 1.4em; display: grid; gap: 4px; font-size: 0.9rem; }
+.influence li span { font-family: var(--mono); font-size: 0.82rem; color: var(--muted); }
+.about { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+@media (max-width: 860px) { .about { grid-template-columns: minmax(0, 1fr); } }
+.about div { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.about p { font-size: 0.92rem; max-width: 60ch; }
+footer { font-size: 0.8rem; color: var(--muted); max-width: 80ch; }
+code { font-family: var(--mono); font-size: 0.85em; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">Supreme Commander: Forged Alliance &middot; learning agent</div>
+    <h1>FAF Agent Network</h1>
+    <p class="lede">This is the network that makes the agent's decisions, running live in this page with its real weights. Every 2 seconds of game time it reads the list of units it can see and its economy, and gives a probability to every option of five decisions. Pick a moment from a recorded game to see what it sees and what it would do there.</p>
+    <dl class="facts" id="facts"></dl>
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Which weights">
+        <button type="button" id="w-trained" aria-pressed="true">Trained</button>
+        <button type="button" id="w-random" aria-pressed="false">Untrained (random)</button>
+      </div>
+      <span class="check" id="check">Checking against PyTorch&hellip;</span>
+    </div>
+    <p class="muted" style="font-size: 0.86rem; max-width: 68ch">Both settings read the same recorded game, so the map stays the same: it is the network's input. What changes is what the network makes of it: the decision bars, the layer activity and the rings.</p>
+  </header>
+
+  <main class="console">
+    <section class="pane" aria-labelledby="moment-h">
+      <h2 id="moment-h">The moment</h2>
+      <div class="row">
+        <label for="game" class="muted">Game</label>
+        <select id="game"></select>
+        <button type="button" class="btn" id="play">Play</button>
+      </div>
+      <div class="scrub">
+        <input type="range" id="moment" min="0" max="0" value="0" aria-label="Moment in the game">
+        <output class="clock" id="clock" for="moment">0:00</output>
+      </div>
+      <div class="mapwrap" id="mapwrap">
+        <canvas id="map" aria-label="Map of the units the agent knows about at this moment"></canvas>
+        <div class="tip" id="tip" hidden></div>
+      </div>
+      <div class="legend">
+        <span><i class="sw own"></i>own</span>
+        <span><i class="sw enemy"></i>enemy in sight</span>
+        <span><i class="sw ghost"></i>remembered enemy building</span>
+        <span><i class="sw radar"></i>radar contact</span>
+        <span><i class="sw infl"></i>changes the decision most</span>
+      </div>
+      <dl class="eco" id="eco"></dl>
+    </section>
+
+    <section class="pane" aria-labelledby="decide-h">
+      <div class="row" style="justify-content: space-between">
+        <h2 id="decide-h">What it decides</h2>
+        <span class="agree" id="agree"></span>
+      </div>
+      <p class="muted" style="font-size: 0.86rem">Bars are the network's probabilities over the options that are possible right now. The option it would pick is in blue; <span class="teach" style="margin: 0">teacher</span> marks what the rule-based teacher actually did at this moment.</p>
+      <div class="heads" id="heads"></div>
+    </section>
+  </main>
+
+  <section class="inside" aria-labelledby="inside-h">
+    <h2 id="inside-h">Inside the network</h2>
+    <p class="lede">Left to right, this is one pass through the network for the moment above. Each strip is a layer; each cell is one number. The darker the cell, the more active that neuron is. Hover a cell to read it.</p>
+    <div class="pipeline">
+      <div class="stage">
+        <h3>1 &middot; Every unit, one by one</h3>
+        <div class="dims" id="d-units"></div>
+        <p>The same small network reads each unit: 26 facts about it (position, health, build progress, idle or busy, cost, weapons, speed, type) plus 16 learned numbers for its blueprint. Out come 64 numbers per unit. Shown: the units in the order the game listed them.</p>
+        <canvas id="c-units" height="120"></canvas>
+      </div>
+      <div class="stage">
+        <h3>2 &middot; Summary by group</h3>
+        <div class="dims">4 groups &times; (average, strongest) &times; 64 = 512</div>
+        <p>The per-unit numbers are pooled separately for own units, enemies in sight, remembered enemy buildings and radar contacts: an average, and the strongest value of each of the 64. That is how any number of units becomes a fixed-size summary.</p>
+        <canvas id="c-pool" height="120"></canvas>
+      </div>
+      <div class="stage">
+        <h3>3 &middot; Game numbers</h3>
+        <div class="dims">88 inputs &rarr; 128</div>
+        <p>Economy, counts, distances, game time and what it chose last time go through their own layer of 128 neurons. Top strip: the 88 inputs. Bottom: the 128 neurons.</p>
+        <canvas id="c-scalars" height="120"></canvas>
+      </div>
+      <div class="stage">
+        <h3>4 &middot; Thinking layers</h3>
+        <div class="dims">512 + 128 &rarr; 256 &rarr; 256 &rarr; 34 outputs</div>
+        <p>Both summaries are combined in two layers of 256 neurons. Five small output layers turn the last one into the 34 scores behind the bars above: 11 build options, 9 produce, 8 army, 3 commander, 3 tech.</p>
+        <canvas id="c-torso" height="120"></canvas>
+      </div>
+    </div>
+    <div class="readout" id="readout" aria-live="polite">Hover a cell to read it.</div>
+    <div class="influence pane">
+      <h3>Which units change the decision most</h3>
+      <p class="muted" style="font-size: 0.86rem">For every unit, the network is run again as if it could not see that unit, and the change in all five decisions is measured (0 = no change, 5 = every decision flips completely). The top units are ringed on the map.</p>
+      <ol id="influence"></ol>
+    </div>
+  </section>
+
+  <section class="about" aria-label="About this network">
+    <div>
+      <h3>Is it really a neural network?</h3>
+      <p>Yes, a small one. Every layer on this page is a set of weighted sums followed by a simple rule that keeps positive values and zeroes negative ones. The <span class="num" id="a-params"></span> weights were learned from examples, not written by hand. It is small on purpose: it will have to run inside Forged Alliance's own Lua scripting later.</p>
+    </div>
+    <div>
+      <h3>What has this copy learned?</h3>
+      <p id="a-learned"></p>
+    </div>
+    <div>
+      <h3>What it does not do</h3>
+      <p>It chooses the five decisions above; scripts carry them out (where to place a building, how units move and fight). It sees only what its army sees. It does not plan ahead explicitly; everything it knows is in its weights.</p>
+    </div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const DATA = JSON.parse($("data").textContent);
+const META = DATA.meta;
+const HEADS = META.heads;
+const HEAD_NAMES = Object.keys(HEADS);
+const GROUPS = ["own", "enemy in sight", "remembered building", "radar contact"];
+const HEAD_TEXT = {
+  build: "What an idle engineer or the commander starts building.",
+  produce: "What an idle factory makes next.",
+  army: "The order for the whole army.",
+  commander: "Where the commander goes.",
+  tech: "Which upgrade to start.",
+};
+const OPTION_TEXT = {
+  none: "nothing", mex: "mass extractor", power: "power generator", land_factory: "land factory",
+  air_factory: "air factory", radar: "radar", point_defense: "point defense", aa_defense: "AA defense",
+  hydro: "hydrocarbon plant", reclaim: "reclaim wrecks", assist: "assist a factory", engineer: "engineer",
+  tank: "tank", artillery: "artillery", mobile_aa: "mobile AA", land_scout: "land scout",
+  interceptor: "interceptor", bomber: "bomber", air_scout: "air scout", attack_nearest: "attack nearest enemy",
+  attack_base: "attack enemy base", raid: "raid mass extractors", defend: "defend forward", retreat: "retreat home",
+  hold: "hold position", hunt: "hunt remaining enemies", home: "go home", join_army: "join the army",
+  upgrade_mex: "upgrade a mass extractor", upgrade_factory: "upgrade a factory",
+};
+
+// ------------------------------------------------------------------ data
+function f32(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Float32Array(bytes.buffer);
+}
+const moments = DATA.games.map((g) => g.moments.map((m) => ({
+  t: m.t, scalars: f32(m.scalars), units: f32(m.units), bp: m.bp,
+  grp: Array.from(m.grp, Number), n: m.bp.length, masks: m.masks, teacher: m.teacher, ref: m.ref,
+})));
+
+function loadTrained() {
+  const all = f32(DATA.weights.b64);
+  const net = {};
+  for (const [name, [off, shape]] of Object.entries(DATA.weights.index)) {
+    const size = shape.reduce((a, b) => a * b, 1);
+    net[name] = { w: all.subarray(off, off + size), shape };
+  }
+  return net;
+}
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// Untrained: PyTorch's default initialisation (uniform in \u00b11/sqrt(fan-in), normal embeddings, near-zero heads)
+function makeUntrained(trained) {
+  const rnd = mulberry32(20260929);
+  const net = {};
+  for (const [name, { shape }] of Object.entries(trained)) {
+    const size = shape.reduce((a, b) => a * b, 1);
+    const w = new Float32Array(size);
+    if (name === "units.embed.weight") {
+      for (let i = 0; i < size; i += 2) {
+        const u = Math.max(rnd(), 1e-12), v = rnd(), r = Math.sqrt(-2 * Math.log(u));
+        w[i] = r * Math.cos(2 * Math.PI * v);
+        if (i + 1 < size) w[i + 1] = r * Math.sin(2 * Math.PI * v);
+      }
+    } else {
+      const weightShape = name.endsWith(".bias") ? trained[name.replace(/\.bias$/, ".weight")].shape : shape;
+      const fanIn = weightShape[1];
+      let bound = 1 / Math.sqrt(fanIn);
+      if (name.startsWith("heads.")) bound = name.endsWith(".bias") ? 0 : 0.01 * Math.sqrt(3 / fanIn);
+      for (let i = 0; i < size; i++) w[i] = (rnd() * 2 - 1) * bound;
+    }
+    net[name] = { w, shape };
+  }
+  return net;
+}
+const NETS = { trained: loadTrained() };
+NETS.random = makeUntrained(NETS.trained);
+
+// ------------------------------------------------------------------ forward pass (fa_train/model.py)
+function dense(W, b, x, out, rows, cols, relu) {
+  for (let r = 0; r < rows; r++) {
+    let s = b[r];
+    const o = r * cols;
+    for (let c = 0; c < cols; c++) s += W[o + c] * x[c];
+    out[r] = relu && s < 0 ? 0 : s;
+  }
+  return out;
+}
+function softmaxMasked(logits, mask) {
+  let m = -Infinity;
+  for (let k = 0; k < logits.length; k++) if (mask[k] === "1" && logits[k] > m) m = logits[k];
+  const p = new Float64Array(logits.length);
+  let z = 0;
+  for (let k = 0; k < logits.length; k++) if (mask[k] === "1") { p[k] = Math.exp(logits[k] - m); z += p[k]; }
+  for (let k = 0; k < logits.length; k++) p[k] /= z;
+  return p;
+}
+function headsForward(net, z2, masks) {
+  const out = {};
+  for (const h of HEAD_NAMES) {
+    const W = net[`heads.${h}.weight`], b = net[`heads.${h}.bias`];
+    const logits = dense(W.w, b.w, z2, new Float32Array(W.shape[0]), W.shape[0], 256, false);
+    out[h] = softmaxMasked(logits, masks[h]);
+  }
+  return out;
+}
+function forward(net, m) {
+  const n = m.n;
+  const E = net["units.embed.weight"].w;
+  const W1 = net["units.mlp.0.weight"].w, b1 = net["units.mlp.0.bias"].w;
+  const W2 = net["units.mlp.2.weight"].w, b2 = net["units.mlp.2.bias"].w;
+  const H = new Float32Array(n * 64), x = new Float32Array(42), h1 = new Float32Array(64);
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < 26; k++) x[k] = m.units[i * 26 + k];
+    const e = Math.min(Math.max(m.bp[i], 0), 1023) * 16;
+    for (let k = 0; k < 16; k++) x[26 + k] = E[e + k];
+    dense(W1, b1, x, h1, 64, 42, true);
+    dense(W2, b2, h1, H.subarray(i * 64, i * 64 + 64), 64, 64, true);
+  }
+  // pooling per group: [mean, max] x 4 groups; the max over a group is 0 when it is empty (activations >= 0)
+  const sums = new Float32Array(256), cnt = [0, 0, 0, 0];
+  const maxv = new Float32Array(256), second = new Float32Array(256), arg = new Int32Array(256).fill(-1);
+  for (let i = 0; i < n; i++) {
+    const g = m.grp[i];
+    cnt[g]++;
+    for (let c = 0; c < 64; c++) {
+      const v = H[i * 64 + c], k = g * 64 + c;
+      sums[k] += v;
+      if (v > maxv[k]) { second[k] = maxv[k]; maxv[k] = v; arg[k] = i; } else if (v > second[k]) second[k] = v;
+    }
+  }
+  const pooled = new Float32Array(512);
+  for (let g = 0; g < 4; g++) {
+    for (let c = 0; c < 64; c++) {
+      pooled[g * 128 + c] = sums[g * 64 + c] / Math.max(cnt[g], 1);
+      pooled[g * 128 + 64 + c] = maxv[g * 64 + c];
+    }
+  }
+  const Ws = net["scalars.0.weight"].w, bs = net["scalars.0.bias"].w;
+  const s128 = dense(Ws, bs, m.scalars, new Float32Array(128), 128, 88, true);
+  const input = new Float32Array(640);
+  input.set(pooled, 0);
+  input.set(s128, 512);
+  const T1 = net["torso.0.weight"].w, t1b = net["torso.0.bias"].w;
+  const z1pre = dense(T1, t1b, input, new Float32Array(256), 256, 640, false);
+  const z1 = z1pre.map((v) => (v < 0 ? 0 : v));
+  const T2 = net["torso.2.weight"].w, t2b = net["torso.2.bias"].w;
+  const z2 = dense(T2, t2b, z1, new Float32Array(256), 256, 256, true);
+  const probs = headsForward(net, z2, m.masks);
+  return { H, sums, cnt, maxv, second, arg, pooled, s128, z1pre, z1, z2, probs };
+}
+// Influence of unit i: rerun without it. Only its group's 128 pooled numbers change, so the first thinking
+// layer is updated by that difference instead of recomputed.
+function influence(net, m, f) {
+  const T1 = net["torso.0.weight"].w, T2 = net["torso.2.weight"].w, t2b = net["torso.2.bias"].w;
+  const d = new Float32Array(128), z1 = new Float32Array(256), z2 = new Float32Array(256);
+  const out = new Float64Array(m.n);
+  for (let i = 0; i < m.n; i++) {
+    const g = m.grp[i], cg = f.cnt[g];
+    for (let c = 0; c < 64; c++) {
+      const k = g * 64 + c;
+      const mean = cg > 1 ? (f.sums[k] - f.H[i * 64 + c]) / (cg - 1) : 0;
+      d[c] = mean - f.pooled[g * 128 + c];
+      const mx = f.arg[k] === i ? f.second[k] : f.maxv[k];
+      d[64 + c] = mx - f.pooled[g * 128 + 64 + c];
+    }
+    for (let r = 0; r < 256; r++) {
+      let s = f.z1pre[r];
+      const o = r * 640 + g * 128;
+      for (let j = 0; j < 128; j++) if (d[j] !== 0) s += T1[o + j] * d[j];
+      z1[r] = s < 0 ? 0 : s;
+    }
+    dense(T2, t2b, z1, z2, 256, 256, true);
+    const p = headsForward(net, z2, m.masks);
+    let total = 0;
+    for (const h of HEAD_NAMES) {
+      let tv = 0;
+      for (let k = 0; k < p[h].length; k++) tv += Math.abs(p[h][k] - f.probs[h][k]);
+      total += tv / 2;
+    }
+    out[i] = total;
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ helpers
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  const v = h.length === 3 ? h.split("").map((x) => x + x).join("") : h;
+  return [parseInt(v.slice(0, 2), 16), parseInt(v.slice(2, 4), 16), parseInt(v.slice(4, 6), 16)];
+}
+function mix(a, b, t) {
+  return `rgb(${Math.round(a[0] + (b[0] - a[0]) * t)},${Math.round(a[1] + (b[1] - a[1]) * t)},${Math.round(a[2] + (b[2] - a[2]) * t)})`;
+}
+const clock = (minutes) => {
+  const s = Math.round(minutes * 60);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+const fmt = (v, d = 0) => v.toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d });
+function role(f) {
+  if (f[23] > 0.5) return "Commander";
+  if (f[15] > 0.5) return "Engineer";
+  if (f[16] > 0.5) return f[20] > 0.5 ? "Air factory" : "Land factory";
+  if (f[17] > 0.5) return "Mass extractor";
+  if (f[18] > 0.5) return "Power generator";
+  if (f[24] > 0.5) return "Defense";
+  if (f[25] > 0.5) return "Scout";
+  if (f[19] > 0.5) return "Structure";
+  if (f[20] > 0.5) return "Aircraft";
+  if (f[21] > 0.5) return "Ship";
+  return f[11] > 0 ? "Land unit" : "Unit";
+}
+function unitRow(m, i) { return m.units.subarray(i * 26, i * 26 + 26); }
+
+// ------------------------------------------------------------------ state
+const state = { game: 0, idx: 0, net: "trained", fwd: null, infl: null, hover: -1, timer: null };
+const current = () => moments[state.game][state.idx];
+
+// ------------------------------------------------------------------ static parts
+(function init() {
+  const total = DATA.games.reduce((a, g) => a + g.moments.length, 0);
+  const acting = META.agreement_when_acting || {};
+  const agreeVals = Object.values(acting).filter((v) => v !== null && v !== undefined);
+  const facts = [
+    ["decision weights", fmt(META.params)],
+    ["decisions", "5 every 2 s"],
+    ["moments on this page", `${total} from ${DATA.games.length} games`],
+    ["matches the teacher's actions", agreeVals.length ? `${fmt(100 * agreeVals.reduce((a, b) => a + b, 0) / agreeVals.length)} % (unseen games)` : "\u2013"],
+  ];
+  $("facts").innerHTML = facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
+  $("a-params").textContent = fmt(META.params);
+  $("a-learned").textContent = (META.trained_on ? META.trained_on + " " : "") +
+    "It learned to imitate the rule-based teacher: given what the teacher saw, predict what it chose. " +
+    "The next step is learning from its own games, where a win counts +10 and a loss \u221210.";
+  $("foot").innerHTML = `Weights: <code>${META.checkpoint}</code>. The critic, a second network of ${fmt(META.critic_params)} weights that judges positions during training, is not shown: it never chooses actions. Regenerate this page with <code>tools/network_viz.py</code>.`;
+  $("game").innerHTML = DATA.games.map((g, i) =>
+    `<option value="${i}">${g.label} \u00b7 ${g.outcome === "victory" ? "won" : g.outcome} at ${clock(g.minutes)}</option>`).join("");
+})();
+
+// ------------------------------------------------------------------ rendering
+function renderHeads(m, f) {
+  const parts = [];
+  let agreeCount = 0, compared = 0;
+  for (const h of HEAD_NAMES) {
+    const opts = HEADS[h], mask = m.masks[h], p = f.probs[h];
+    let best = 0;
+    for (let k = 0; k < opts.length; k++) if (mask[k] === "1" && p[k] > p[best]) best = k;
+    const teacher = m.teacher[h];
+    const open = [], closed = [];
+    for (let k = 0; k < opts.length; k++) (mask[k] === "1" ? open : closed).push(k);
+    if (open.length > 1) { compared++; if (best === teacher) agreeCount++; }   // only real choices count
+    const rows = open.map((k) => `
+      <div class="opt${k === best ? " top" : ""}">
+        <span class="label">${OPTION_TEXT[opts[k]] || opts[k]}${k === teacher ? '<span class="teach">teacher</span>' : ""}</span>
+        <span class="bar" aria-hidden="true"><i style="width:${(100 * p[k]).toFixed(1)}%"></i></span>
+        <span class="pct">${(100 * p[k]).toFixed(1)}%</span>
+      </div>`).join("");
+    const closedText = closed.length && open.length > 1
+      ? `<div class="closed">Not possible now: ${closed.map((k) => OPTION_TEXT[opts[k]] || opts[k]).join(", ")}</div>`
+      : open.length === 1 ? `<div class="closed">Nothing to choose right now${h === "build" ? " (no idle builder)" : h === "produce" ? " (no idle factory)" : ""}.</div>` : "";
+    parts.push(`<div class="head"><header><h3>${h[0].toUpperCase() + h.slice(1)}</h3><span class="what">${HEAD_TEXT[h]}</span></header>${open.length > 1 ? rows : ""}${closedText}</div>`);
+  }
+  $("heads").innerHTML = parts.join("");
+  const a = $("agree");
+  a.textContent = compared ? `${agreeCount} of ${compared} open decisions match the teacher` : "nothing to decide";
+  a.className = "agree " + (agreeCount === compared ? "yes" : "no");
+}
+
+function renderEco(m) {
+  const s = m.scalars;
+  const count = (i) => Math.round(Math.expm1(s[i]));
+  const groups = [0, 0, 0, 0];
+  for (const g of m.grp) groups[g]++;
+  const items = [
+    ["mass income", `+${fmt(s[3] * 50, 1)}/s`, "mass"],
+    ["mass stored", fmt(s[1] * 1000), "mass"],
+    ["army", `${count(37)} units`, ""],
+    ["energy income", `+${fmt(s[8] * 500)}/s`, "energy"],
+    ["energy stored", fmt(s[6] * 10000), "energy"],
+    ["enemies in sight", `${groups[1]}`, ""],
+  ];
+  $("eco").innerHTML = items.map(([k, v, c]) => `<div><dt>${k}</dt><dd class="${c}">${v}</dd></div>`).join("");
+}
+
+function sizeCanvas(canvas, cssHeight) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = cssHeight ?? canvas.clientHeight;
+  canvas.width = Math.max(1, Math.round(w * dpr));
+  canvas.height = Math.max(1, Math.round(h * dpr));
+  if (cssHeight) canvas.style.height = cssHeight + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+function drawMap() {
+  const m = current(), canvas = $("map");
+  const { ctx, w, h } = sizeCanvas(canvas);
+  ctx.fillStyle = css("--map");
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = css("--map-grid");
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 8; i++) {
+    const p = Math.round((i * w) / 8) + 0.5, q = Math.round((i * h) / 8) + 0.5;
+    ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, q); ctx.lineTo(w, q); ctx.stroke();
+  }
+  const own = css("--own"), enemy = css("--enemy"), muted = css("--muted"), focus = css("--focus");
+  const order = [3, 2, 1, 0];
+  const pos = [];
+  for (const g of order) {
+    for (let i = 0; i < m.n; i++) {
+      if (m.grp[i] !== g) continue;
+      const f = unitRow(m, i);
+      const x = f[0] * w, y = f[1] * h;
+      const r = g === 3 ? 2 : 2.2 + 5 * Math.max(0, f[9]);
+      pos[i] = [x, y, r];
+      ctx.globalAlpha = f[5] < 1 && g === 0 ? 0.45 : 1;
+      if (g === 3) { ctx.fillStyle = muted; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); continue; }
+      const color = g === 0 ? own : enemy;
+      const structure = f[19] > 0.5;
+      if (g === 2) {
+        ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.strokeRect(x - r, y - r, 2 * r, 2 * r);
+      } else if (f[23] > 0.5) {
+        ctx.fillStyle = color; ctx.beginPath();
+        ctx.moveTo(x, y - r - 3); ctx.lineTo(x + r + 3, y); ctx.lineTo(x, y + r + 3); ctx.lineTo(x - r - 3, y); ctx.closePath(); ctx.fill();
+      } else if (structure) {
+        ctx.fillStyle = color; ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+      } else {
+        ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+  if (state.infl) {
+    const ranked = Array.from(state.infl.keys()).sort((a, b) => state.infl[b] - state.infl[a]).slice(0, 6);
+    const top = state.infl[ranked[0]] || 0;
+    for (const i of ranked) {
+      if (!pos[i] || state.infl[i] <= 0.005) continue;
+      const [x, y, r] = pos[i];
+      ctx.strokeStyle = focus; ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.35 + 0.65 * (top ? state.infl[i] / top : 0);
+      ctx.beginPath(); ctx.arc(x, y, r + 4 + 8 * Math.sqrt(top ? state.infl[i] / top : 0), 0, 7); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+  if (state.hover >= 0 && pos[state.hover]) {
+    const [x, y, r] = pos[state.hover];
+    ctx.strokeStyle = css("--ink"); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(x, y, r + 3, 0, 7); ctx.stroke();
+  }
+  canvas._pos = pos;
+}
+
+function strip(canvas, rows, opts = {}) {
+  const rowH = opts.rowH || 12, gap = rowH < 6 ? 1 : 3;
+  const height = rows.length * (rowH + gap) - gap;
+  const { ctx, w } = sizeCanvas(canvas, height);
+  const lo = hexToRgb(css("--heat0")), hi = hexToRgb(css("--heat1")), neg = hexToRgb(css("--enemy"));
+  ctx.fillStyle = css("--bg");
+  ctx.fillRect(0, 0, w, height);
+  rows.forEach((row, ri) => {
+    const vals = row.values;
+    const cellW = w / vals.length;          // each row spans the full width
+    let mx = 1e-9;
+    for (const v of vals) mx = Math.max(mx, Math.abs(v));
+    const y = ri * (rowH + gap);
+    for (let c = 0; c < vals.length; c++) {
+      const t = Math.min(1, Math.abs(vals[c]) / mx);
+      ctx.fillStyle = vals[c] < 0 ? mix(lo, neg, t) : mix(lo, hi, t);
+      ctx.fillRect(c * cellW, y, Math.max(1, cellW - (cellW > 3 ? 0.5 : 0)), rowH);
+    }
+  });
+  canvas._rows = rows; canvas._rowH = rowH; canvas._gap = gap;
+}
+
+function drawLayers() {
+  const f = state.fwd, m = current();
+  // 1 \u00b7 units: one row per unit (first 24), 64 columns
+  const unitRows = [];
+  for (let i = 0; i < Math.min(m.n, 24); i++) {
+    unitRows.push({ values: f.H.subarray(i * 64, i * 64 + 64), label: `${role(unitRow(m, i))} (${GROUPS[m.grp[i]]})`, kind: "unit" });
+  }
+  $("d-units").textContent = `${m.n} units \u00d7 (26 + 16) \u2192 64 \u2192 64` + (m.n > 24 ? ` \u00b7 first 24 shown` : "");
+  strip($("c-units"), unitRows, { rowH: 4 });
+  // 2 \u00b7 pooled: 8 rows of 64
+  const poolRows = [];
+  for (let g = 0; g < 4; g++) {
+    poolRows.push({ values: f.pooled.subarray(g * 128, g * 128 + 64), label: `${GROUPS[g]}: average (${f.cnt[g]} units)`, kind: "pool" });
+    poolRows.push({ values: f.pooled.subarray(g * 128 + 64, g * 128 + 128), label: `${GROUPS[g]}: strongest`, kind: "pool" });
+  }
+  strip($("c-pool"), poolRows, { rowH: 11 });
+  // 3 \u00b7 scalars: inputs and the 128 layer
+  strip($("c-scalars"), [
+    { values: m.scalars, label: "input", kind: "scalar" },
+    { values: f.s128, label: "layer of 128", kind: "neuron" },
+  ], { rowH: 20 });
+  // 4 \u00b7 torso
+  strip($("c-torso"), [
+    { values: f.z1, label: "first layer of 256", kind: "neuron" },
+    { values: f.z2, label: "second layer of 256", kind: "neuron" },
+  ], { rowH: 20 });
+}
+
+function hookStrip(canvas) {
+  canvas.addEventListener("pointermove", (e) => {
+    if (!canvas._rows) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const ri = Math.floor(y / (canvas._rowH + canvas._gap));
+    const row = canvas._rows[ri];
+    if (!row) return;
+    const c = Math.floor((x / rect.width) * row.values.length);
+    if (c < 0 || c >= row.values.length) return;
+    const v = row.values[c];
+    let name = `#${c + 1}`;
+    if (row.kind === "scalar") name = META.scalar_names[c] || name;
+    $("readout").textContent = `${row.label} \u00b7 ${name}: ${v.toFixed(3)}`;
+  });
+}
+["c-units", "c-pool", "c-scalars", "c-torso"].forEach((id) => hookStrip($(id)));
+
+function renderInfluence(m) {
+  const list = $("influence");
+  if (!state.infl) { list.innerHTML = "<li>Measuring\u2026</li>"; return; }
+  const ranked = Array.from(state.infl.keys()).sort((a, b) => state.infl[b] - state.infl[a]).slice(0, 6);
+  if (!ranked.length || state.infl[ranked[0]] <= 0.005) {
+    list.innerHTML = state.net === "random"
+      ? "<li>No unit changes its decisions noticeably: with random weights the network barely reacts to what it sees.</li>"
+      : "<li>No single unit changes the decisions noticeably at this moment.</li>";
+    return;
+  }
+  list.innerHTML = ranked.map((i) => {
+    const f = unitRow(m, i);
+    return `<li>${role(f)}, ${GROUPS[m.grp[i]]} <span>${state.infl[i].toFixed(3)}</span></li>`;
+  }).join("");
+}
+
+let inflTimer = null;
+function update() {
+  const m = current(), net = NETS[state.net];
+  state.fwd = forward(net, m);
+  state.infl = null;
+  $("moment").value = String(state.idx);
+  $("clock").textContent = clock(m.t);
+  renderHeads(m, state.fwd);
+  renderEco(m);
+  drawMap();
+  drawLayers();
+  renderInfluence(m);
+  clearTimeout(inflTimer);
+  inflTimer = setTimeout(() => {
+    state.infl = influence(net, m, state.fwd);
+    drawMap();
+    renderInfluence(m);
+  }, 90);
+}
+
+function selectGame(i) {
+  state.game = i;
+  state.idx = Math.min(state.idx, moments[i].length - 1);
+  const r = $("moment");
+  r.max = String(moments[i].length - 1);
+  update();
+}
+
+// ------------------------------------------------------------------ interaction
+$("game").addEventListener("change", (e) => { state.idx = 0; selectGame(Number(e.target.value)); });
+$("moment").addEventListener("input", (e) => { state.idx = Number(e.target.value); update(); });
+$("play").addEventListener("click", () => {
+  if (state.timer) { clearInterval(state.timer); state.timer = null; $("play").textContent = "Play"; return; }
+  if (state.idx >= moments[state.game].length - 1) state.idx = 0;
+  $("play").textContent = "Pause";
+  state.timer = setInterval(() => {
+    if (state.idx >= moments[state.game].length - 1) { clearInterval(state.timer); state.timer = null; $("play").textContent = "Play"; return; }
+    state.idx++; update();
+  }, 900);
+});
+function setNet(which) {
+  state.net = which;
+  $("w-trained").setAttribute("aria-pressed", String(which === "trained"));
+  $("w-random").setAttribute("aria-pressed", String(which === "random"));
+  update();
+}
+$("w-trained").addEventListener("click", () => setNet("trained"));
+$("w-random").addEventListener("click", () => setNet("random"));
+
+const mapCanvas = $("map"), tip = $("tip");
+function pickUnit(e) {
+  const rect = mapCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const pos = mapCanvas._pos || [];
+  let best = -1, bestD = 14 * 14;
+  pos.forEach((p, i) => {
+    if (!p) return;
+    const d = (p[0] - x) ** 2 + (p[1] - y) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return { best, x, y, rect };
+}
+function showTip(e) {
+  const { best, x, y, rect } = pickUnit(e);
+  if (best !== state.hover) { state.hover = best; drawMap(); }
+  if (best < 0) { tip.hidden = true; return; }
+  const m = current(), f = unitRow(m, best);
+  const lines = [
+    `<b>${role(f)}</b> \u00b7 ${GROUPS[m.grp[best]]}`,
+    m.grp[best] === 3 ? "Only a radar blip: type unknown." : `Health ${fmt(100 * f[4])} % \u00b7 built ${fmt(100 * f[5])} %`,
+  ];
+  if (m.grp[best] === 0) lines.push(f[6] > 0.5 ? "Idle" : "Busy");
+  if (m.grp[best] !== 3 && f[11] > 0) lines.push(`Damage ${fmt(f[11] * 200, 1)}/s \u00b7 range ${fmt(f[12] * 100)}`);
+  if (m.grp[best] !== 3 && f[13] > 0) lines.push(`Speed ${fmt(f[13] * 10, 1)}`);
+  if (state.infl) lines.push(`Changes the decisions by ${state.infl[best].toFixed(3)}`);
+  tip.innerHTML = lines.join("<br>");
+  tip.hidden = false;
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  tip.style.left = Math.min(Math.max(4, x + 14), rect.width - tw - 4) + "px";
+  tip.style.top = Math.min(Math.max(4, y + 14), rect.height - th - 4) + "px";
+}
+mapCanvas.addEventListener("pointermove", showTip);
+mapCanvas.addEventListener("pointerdown", showTip);
+mapCanvas.addEventListener("pointerleave", () => { tip.hidden = true; state.hover = -1; drawMap(); });
+
+// redraw on resize and theme changes
+new ResizeObserver(() => { drawMap(); if (state.fwd) drawLayers(); }).observe($("mapwrap"));
+window.addEventListener("resize", () => { if (state.fwd) drawLayers(); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawMap(); drawLayers(); });
+new MutationObserver(() => { drawMap(); drawLayers(); }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+// ------------------------------------------------------------------ start
+selectGame(0);
+{ // pick an interesting opening moment: the first one where the army head has several options
+  const g = moments[0];
+  const k = g.findIndex((m) => m.t > 6 && (m.masks.army.match(/1/g) || []).length > 2);
+  if (k > 0) { state.idx = k; update(); }
+}
+// self-check: the trained network here against the probabilities PyTorch computed for every moment
+setTimeout(() => {
+  let worst = 0, count = 0;
+  moments.forEach((g) => g.forEach((m) => {
+    const p = forward(NETS.trained, m).probs;
+    for (const h of HEAD_NAMES) m.ref[h].forEach((v, k) => { worst = Math.max(worst, Math.abs(v - p[h][k])); });
+    count++;
+  }));
+  const el = $("check");
+  const ok = worst < 1e-4;
+  el.className = "check " + (ok ? "ok" : "bad");
+  el.textContent = ok ? `Same answers as PyTorch on all ${count} moments (largest difference ${worst.toExponential(1)})`
+                      : `Differs from PyTorch by up to ${worst.toFixed(4)}`;
+}, 60);
+</script>

@@ -1,0 +1,67 @@
+From 5ca561a3ffad337b8c059930abd336e94f9a707b Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 18:07:54 +0200
+Subject: [PATCH 23/56] Sum the tilt arithmetic in the binary's order
+
+Two association-order differences in the terrain/fall tilt path, each
+moving the last bit of a quaternion lane:
+
+- BuildTiltShortestArcDelta (FUN_0050CB50) sums the dot product of the
+  current up axis and the half vector as (z + x) + y
+  (0x0050CBC4-0x0050CBDA); the recovery summed (x + y) + z. Shared by
+  COORDS_Tilt (every land unit on sloped ground) and falling props.
+- COORDS_Tilt (0x0050B820) composes tiltDelta * orientation with its own
+  per-lane order (0x0050B8DA-0x0050B9C4); MultiplyQuat associates the x
+  and z lanes differently, so the product is now spelled out inline.
+
+Found by replaying an FAF recording: a falling tree's orientation
+drifted a few float ulps from the shipped engine's.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 8875086bb3115564d1d0051b7b242c3c5a5e6dba)
+---
+ src/sdk/moho/entity/Entity.cpp       | 13 ++++++++++++-
+ src/sdk/moho/math/QuaternionMath.cpp |  3 ++-
+ 2 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/src/sdk/moho/entity/Entity.cpp b/src/sdk/moho/entity/Entity.cpp
+index 58812644..0936e909 100644
+--- a/src/sdk/moho/entity/Entity.cpp
++++ b/src/sdk/moho/entity/Entity.cpp
+@@ -7995,7 +7995,18 @@ namespace moho
+ 
+     Wm3::Quaternionf tiltDelta{};
+     (void)BuildTiltShortestArcDelta(surfaceNormal, &tiltDelta, currentUp);
+-    *orientation = MultiplyQuat(tiltDelta, oldOrientation);
++
++    // tiltDelta * oldOrientation, each lane summed in the binary's order
++    // (0x0050B8DA-0x0050B9C4); MultiplyQuat associates the x and z lanes
++    // differently, which moves their last bit.
++    const Wm3::Quaternionf& d = tiltDelta;
++    const Wm3::Quaternionf& o = oldOrientation;
++    Wm3::Quaternionf tilted{};
++    tilted.w = (((o.w * d.w) - (o.x * d.x)) - (o.y * d.y)) - (o.z * d.z);
++    tilted.x = (((o.z * d.y) + (o.x * d.w)) + (o.w * d.x)) - (o.y * d.z);
++    tilted.y = (((o.w * d.y) + (o.x * d.z)) + (o.y * d.w)) - (o.z * d.x);
++    tilted.z = (((o.w * d.z) + (o.z * d.w)) + (o.y * d.x)) - (o.x * d.y);
++    *orientation = tilted;
+   }
+ 
+   /**
+diff --git a/src/sdk/moho/math/QuaternionMath.cpp b/src/sdk/moho/math/QuaternionMath.cpp
+index 55c7167c..fae4c0f7 100644
+--- a/src/sdk/moho/math/QuaternionMath.cpp
++++ b/src/sdk/moho/math/QuaternionMath.cpp
+@@ -995,7 +995,8 @@ namespace moho
+     };
+     (void)Wm3::Vector3f::Normalize(&halfAxis);
+ 
+-    const float scalar = (currentUp.x * halfAxis.x) + (currentUp.y * halfAxis.y) + (currentUp.z * halfAxis.z);
++    // 0x0050CBC4-0x0050CBDA sum the dot product as (z + x) + y.
++    const float scalar = ((currentUp.z * halfAxis.z) + (currentUp.x * halfAxis.x)) + (currentUp.y * halfAxis.y);
+     outDelta->w = scalar;
+     if (scalar == 0.0f) {
+       // Exactly opposed: the half-vector is degenerate, so pick an axis
+-- 
+2.55.0.windows.3
+

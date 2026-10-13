@@ -1,0 +1,4 @@
+torch>=2.4
+numpy>=2.0
+gymnasium>=1.0
+# optional, for some tools: matplotlib (tools/rl/rl_graph.py), zstandard (replay tools), pefile (binary tools)

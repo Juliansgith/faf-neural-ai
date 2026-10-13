@@ -1,0 +1,44 @@
+From c9a54e5aab8940e3d450c219092e43f1b21d559d Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 23:53:02 +0200
+Subject: [PATCH 33/56] Agent: /agentbackground keeps the game window off
+ screen and unfocused
+
+Training games run beside the user's own programs, so their window must never
+cover anything or take the focus. With /agentbackground the main frame is made
+non-activatable (WS_EX_NOACTIVATE) and parked off every screen before it is
+first shown; the agent minimizes it once the game runs. Measured: from launch
+to minimized the window was never the foreground window and never on screen
+(it was the foreground for seconds and on screen for ~2 s before).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit b900bf1b660b641c33c177da9caa301051f2c595)
+---
+ src/sdk/moho/app/CScApp.cpp | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/src/sdk/moho/app/CScApp.cpp b/src/sdk/moho/app/CScApp.cpp
+index a5dadfc3..aa64ee91 100644
+--- a/src/sdk/moho/app/CScApp.cpp
++++ b/src/sdk/moho/app/CScApp.cpp
+@@ -1366,6 +1366,17 @@ bool CScApp::CreateAppFrame(
+     frame = nullptr;
+     supcomFrame = new WSupComFrame(title.c_str(), position, primarySize, frameStyle);
+ 
++    // [AGENT] /agentbackground: training games run beside the user's own programs, so their window must
++    // never cover anything or take the focus. Before it is first shown, park it off every screen and make
++    // it non-activatable (the agent minimizes it once the game runs).
++    if (moho::CFG_GetArgOption("/agentbackground", 0, nullptr)) {
++      const HWND hwnd = reinterpret_cast<HWND>(supcomFrame->GetHandle());
++      ::SetWindowLongW(hwnd, GWL_EXSTYLE, ::GetWindowLongW(hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
++      ::SetWindowPos(
++        hwnd, HWND_BOTTOM, -20000, -20000, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
++      );
++    }
++
+     if (primaryHead.mWindowed) {
+       supcomFrame->Show(false);
+     } else {
+-- 
+2.55.0.windows.3
+

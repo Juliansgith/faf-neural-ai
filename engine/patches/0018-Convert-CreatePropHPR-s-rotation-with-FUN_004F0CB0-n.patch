@@ -1,0 +1,44 @@
+From 3aa6e249caf66e386cca1b7c55a77f498f01c629 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 17:20:19 +0200
+Subject: [PATCH 18/56] Convert CreatePropHPR's rotation with FUN_004F0CB0, not
+ MatrixToQuat
+
+CreatePropHPR builds its heading/pitch/roll matrix with FUN_006D1E30
+and converts it with FUN_004F0CB0 (0x006FC2E3: x = m21 - m12,
+y = m02 - m20, z = m10 - m01), the same conversion CreateUnitHPR uses.
+The recovery called func_MatrixToQuat (0x004EB3F0), which has the
+opposite lane order, so every prop created through it -- all map props,
+mass and hydrocarbon deposits -- got the conjugate orientation: its
+heading mirrored, and its collision box turned the other way.
+
+Found by replaying an FAF recording: the commander warp-in's
+DamageRing hit a different set of trees than the shipped engine (the
+ring test runs against the props' oriented collision boxes), and the
+random stream diverged from there.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit d39d9ef11870dcb0a5070f48d165b8580219ff26)
+---
+ src/sdk/moho/entity/Prop.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/sdk/moho/entity/Prop.cpp b/src/sdk/moho/entity/Prop.cpp
+index 7986fa66..a6449945 100644
+--- a/src/sdk/moho/entity/Prop.cpp
++++ b/src/sdk/moho/entity/Prop.cpp
+@@ -389,7 +389,10 @@ namespace moho
+     transform.pos_.x = posX;
+     transform.pos_.y = posY;
+     transform.pos_.z = posZ;
+-    (void)MatrixToQuat(rotationMatrix, &transform.orient_);
++    // 0x006FC2E3 converts with FUN_004F0CB0 (x = m21 - m12, ...), as CreateUnitHPR does -- not with
++    // func_MatrixToQuat (0x004EB3F0), whose opposite lane order gave every map prop the conjugate
++    // orientation (a mirrored heading, and collision boxes turned the wrong way).
++    (void)MatrixRowsToQuatCanonical(rotationMatrix, &transform.orient_);
+ 
+     Prop* const prop = PROP_Create(sim, transform, blueprintId.c_str());
+     if (prop == nullptr) {
+-- 
+2.55.0.windows.3
+

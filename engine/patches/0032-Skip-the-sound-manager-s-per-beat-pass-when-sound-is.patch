@@ -1,0 +1,44 @@
+From 0561ea938ba0b3a04ac034ca61df4e490fedd4dd Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 19:20:41 +0200
+Subject: [PATCH 32/56] Skip the sound manager's per-beat pass when sound is
+ off
+
+With /nosound there is no audio engine, so nothing in UpdateSoundRequests
+can play. Upstream's temporary [SNDDIAG] probes (d8f948b6) still run in
+it every beat: a sweep of the whole CSndParams registry plus, for every
+audible entity, a linear registry lookup under a mutex and two or three
+VirtualQuery calls. In an unpaced agent game that was 70-80 % of the main
+thread, which the sim thread then waited on.
+
+Measured on one rule-policy game (SCMP_016, seed 5): game minutes 5-8
+take 5 s instead of 10 s; the sim thread goes from 62 % to 98 % of a
+core, the main thread from 99 % to 52 % (30 % minimized).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 81c590060a786cc21270bcda13aaf6b51f1ca332)
+---
+ src/sdk/moho/audio/CUserSoundManager.cpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/sdk/moho/audio/CUserSoundManager.cpp b/src/sdk/moho/audio/CUserSoundManager.cpp
+index bbbec322..42621b24 100644
+--- a/src/sdk/moho/audio/CUserSoundManager.cpp
++++ b/src/sdk/moho/audio/CUserSoundManager.cpp
+@@ -1015,6 +1015,13 @@ namespace moho
+ 
+   void CUserSoundManager::UpdateSoundRequests(const gpg::fastvector<SAudioRequest>& requests)
+   {
++    // Engine addition (agent bridge): without an audio engine (/nosound) nothing in this pass can
++    // play, but the [SNDDIAG] probes below still sweep the descriptor registry and VirtualQuery
++    // every audible entity each frame -- most of a /nosound training game's main thread. Skip it.
++    if (!SND_Enabled()) {
++      return;
++    }
++
+     // TEMPORARY PROBE [SNDDIAG] (do not commit) -- sweep every live descriptor
+     // once a beat so a corrupted one is reported on the beat it goes bad,
+     // rather than later when whichever entity happens to own it enters the
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,76 @@
+From d1c20297a19c7d4e5458c5d46931b2d671cba1e2 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 15:12:39 +0200
+Subject: [PATCH 03/56] Register the user-lane SetAutoMode binder under its own
+ name
+
+Sim.cpp defined the user-lane global `SetAutoMode` (0x008BAD80) as
+func_UnitSetAutoMode_LuaFuncDef, the same symbol as the sim-lane
+Unit:SetAutoMode binder (0x006C8000) in Unit.cpp. /FORCE kept one of the two
+and the other binding silently disappeared. Rename it to
+func_SetAutoMode_LuaFuncDef, register it, and correct the thunk header's
+documentation.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 33d806314d5763bdc43ace5d09a8433c1554d492)
+---
+ src/sdk/moho/sim/Sim.cpp                       | 3 ++-
+ src/sdk/moho/sim/Sim.h                         | 2 +-
+ src/sdk/moho/unit/core/UnitLuaFunctionThunks.h | 5 +++--
+ 3 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/src/sdk/moho/sim/Sim.cpp b/src/sdk/moho/sim/Sim.cpp
+index 8a97214d..d5f4c7c6 100644
+--- a/src/sdk/moho/sim/Sim.cpp
++++ b/src/sdk/moho/sim/Sim.cpp
+@@ -15287,7 +15287,7 @@ int moho::cfunc_SetAutoMode(lua_State* const luaContext)
+  * What it does:
+  * Publishes the global user-Lua binder for `SetAutoMode`.
+  */
+-moho::CScrLuaInitForm* moho::func_UnitSetAutoMode_LuaFuncDef()
++moho::CScrLuaInitForm* moho::func_SetAutoMode_LuaFuncDef()
+ {
+   static CScrLuaBinder binder(
+     UserLuaInitSet(),
+@@ -27092,6 +27092,7 @@ namespace
+       (void)::moho::func_RegisterBeamBlueprint_LuaFuncDef();
+       (void)::moho::func_ExecLuaInSim_LuaFuncDef();
+       (void)::moho::func_SimCallback_LuaFuncDef();
++      (void)::moho::func_SetAutoMode_LuaFuncDef();
+       (void)::moho::func_SetAutoSurfaceMode_LuaFuncDef();
+       (void)::moho::func_ToggleScriptBit_LuaFuncDef();
+       (void)::moho::func_SetPaused_LuaFuncDef();
+diff --git a/src/sdk/moho/sim/Sim.h b/src/sdk/moho/sim/Sim.h
+index 444dfce1..cb200dbc 100644
+--- a/src/sdk/moho/sim/Sim.h
++++ b/src/sdk/moho/sim/Sim.h
+@@ -3625,7 +3625,7 @@ namespace moho
+    * What it does:
+    * Publishes the user-lane Lua binder definition for `SetAutoMode`.
+    */
+-  CScrLuaInitForm* func_UnitSetAutoMode_LuaFuncDef();
++  CScrLuaInitForm* func_SetAutoMode_LuaFuncDef();
+ 
+   /**
+    * Address: 0x008BB2E0 (FUN_008BB2E0, cfunc_SetAutoSurfaceMode)
+diff --git a/src/sdk/moho/unit/core/UnitLuaFunctionThunks.h b/src/sdk/moho/unit/core/UnitLuaFunctionThunks.h
+index 470337a4..dda6816c 100644
+--- a/src/sdk/moho/unit/core/UnitLuaFunctionThunks.h
++++ b/src/sdk/moho/unit/core/UnitLuaFunctionThunks.h
+@@ -85,10 +85,11 @@ namespace moho
+   CScrLuaInitForm* func_UnitAddBuildRestriction_LuaFuncDef();
+ 
+   /**
+-   * Address: 0x008BAD80 (FUN_008BAD80, func_SetAutoMode_LuaFuncDef)
++   * Address: 0x006C8000 (FUN_006C8000, func_UnitSetAutoMode_LuaFuncDef)
+    *
+    * What it does:
+-   * Publishes the global user-Lua binder for `SetAutoMode`.
++   * Publishes the sim-Lua `Unit:SetAutoMode(enabled)` binder. (The user-lane global
++   * `SetAutoMode` at 0x008BAD80 is `func_SetAutoMode_LuaFuncDef` in sim/Sim.h.)
+    */
+   CScrLuaInitForm* func_UnitSetAutoMode_LuaFuncDef();
+   CScrLuaInitForm* func_UnitGetFireState_LuaFuncDef();
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,427 @@
+From bb4ebe1a9681b4f72606db2bfeb9310683487bdf Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 20:40:17 +0200
+Subject: [PATCH 34/56] Agent: per-step timing breakdown and load-phase marks
+
+Measuring where a training game's wall time goes needs more than the
+step report's sim/observe/act totals.
+
+- The step timing adds simCpuMs (sim-thread CPU since the last reply, as
+  opposed to wall time, which includes waiting for a CPU), observeLuaMs
+  (AgentBridge_Observe alone; observeMs - observeLuaMs is the JSON
+  encoding), obsBytes and luaKB (the sim Lua heap).
+- AgentBridge_Lap([name]) lets the bridge script time its own sections;
+  the totals come back per step as timing.laps.
+- AGENT_LoadMark(phase) records loading milestones in milliseconds since
+  the process was created (begin_session, preload, rules_loaded,
+  session_lua, map_loaded, loaded, session/driver created, sim_create,
+  sim_created, first_sync, game_ui, first_beat, hello); the hello message
+  reports them as "load". Hooks in WLD_BeginSession, the WLD frame
+  actions, the scenario loader and CSimDriver::ThreadCreateSim; inert
+  without /agentbridge.
+
+(cherry picked from commit fb8b4764b9a30c28ce500c9d6d1b87a77d0d3a90)
+
+Ported onto 8977bb9d: the driver and sim are now scoped_ptrs (sSimDriver.reset / mSim.reset in a try), so the load marks sit around upstream's reset calls instead of the old manual delete sequence.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ src/sdk/moho/agent/AgentBridge.cpp         | 153 ++++++++++++++++++++-
+ src/sdk/moho/agent/AgentBridge.h           |   7 +
+ src/sdk/moho/sim/CWldSession.cpp           |   8 ++
+ src/sdk/moho/sim/CWldSessionLoaderImpl.cpp |   5 +
+ src/sdk/moho/sim/SimDriver.cpp             |   2 +
+ 5 files changed, 171 insertions(+), 4 deletions(-)
+
+diff --git a/src/sdk/moho/agent/AgentBridge.cpp b/src/sdk/moho/agent/AgentBridge.cpp
+index 83ff9efb..23706f4d 100644
+--- a/src/sdk/moho/agent/AgentBridge.cpp
++++ b/src/sdk/moho/agent/AgentBridge.cpp
+@@ -13,6 +13,7 @@
+ #include <exception>
+ #include <fstream>
+ #include <iterator>
++#include <mutex>
+ #include <string>
+ #include <string_view>
+ #include <thread>
+@@ -756,11 +757,19 @@ namespace moho
+       return 1;
+     }
+ 
+-    bool LoadScript(lua_State* const L, const std::string& path, std::string& error)
++    void RegisterGlobalFunction(lua_State* const L, const char* const name, lua_CFunction function)
+     {
+-      lua_pushstring(L, "AgentBridge_LoadChunk");
+-      lua_pushcclosure(L, &AgentLoadChunk, 0);
++      lua_pushstring(L, name);
++      lua_pushcclosure(L, function, 0);
+       lua_rawset(L, LUA_GLOBALSINDEX);
++    }
++
++    int AgentLap(lua_State* L);
++
++    bool LoadScript(lua_State* const L, const std::string& path, std::string& error)
++    {
++      RegisterGlobalFunction(L, "AgentBridge_LoadChunk", &AgentLoadChunk);
++      RegisterGlobalFunction(L, "AgentBridge_Lap", &AgentLap);
+ 
+       std::ifstream file(path, std::ios::binary);
+       if (!file) {
+@@ -804,6 +813,53 @@ namespace moho
+       lua_rawget(L, tableIndex);
+     }
+ 
++    // ---------------------------------------------------------------------------------------------
++    // Load-phase marks (AGENT_LoadMark): milliseconds since the process was created, from any thread.
++
++    struct LoadMarks
++    {
++      std::mutex lock;
++      std::vector<std::pair<const char*, double>> marks;
++    };
++
++    LoadMarks& Marks()
++    {
++      static LoadMarks marks;
++      return marks;
++    }
++
++    double MillisecondsSinceProcessStart()
++    {
++      FILETIME created{}, exited{}, kernel{}, user{};
++      FILETIME now{};
++      ::GetProcessTimes(::GetCurrentProcess(), &created, &exited, &kernel, &user);
++      ::GetSystemTimePreciseAsFileTime(&now);
++      const auto value = [](const FILETIME& t) {
++        return (static_cast<std::uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
++      };
++      return static_cast<double>(value(now) - value(created)) / 10000.0;
++    }
++
++    // ,"load":[["phase",ms],...] -- and forgets them (a later session in this process starts afresh)
++    void AppendLoadMarks(std::string& message)
++    {
++      LoadMarks& marks = Marks();
++      std::lock_guard<std::mutex> guard(marks.lock);
++      message += ",\"load\":[";
++      for (std::size_t i = 0; i < marks.marks.size(); ++i) {
++        if (i > 0) {
++          message.push_back(',');
++        }
++        message.push_back('[');
++        AppendJsonString(message, marks.marks[i].first, std::strlen(marks.marks[i].first));
++        message.push_back(',');
++        AppendJsonNumber(message, marks.marks[i].second);
++        message.push_back(']');
++      }
++      message.push_back(']');
++      marks.marks.clear();
++    }
++
+     // ---------------------------------------------------------------------------------------------
+     // Per-process runtime state. Only the sim thread touches it.
+ 
+@@ -824,6 +880,14 @@ namespace moho
+       LARGE_INTEGER beatStart{};
+       double beatMs = 0.0;
+       int beats = 0;
++
++      // Sim-thread CPU time (user + kernel, 100 ns units) at the last reply: the CPU the ticks since
++      // then took, as opposed to their wall time (which includes waiting for a CPU).
++      std::uint64_t cpuAtLastReply = 0;
++
++      // Named sections the script times with AgentBridge_Lap(name) during one step.
++      LARGE_INTEGER lapMark{};
++      std::vector<std::pair<std::string, double>> laps;
+     };
+ 
+     AgentBridgeRuntime& Runtime()
+@@ -832,6 +896,44 @@ namespace moho
+       return runtime;
+     }
+ 
++    std::uint64_t ThreadCpu100ns()
++    {
++      FILETIME created{}, exited{}, kernel{}, user{};
++      if (::GetThreadTimes(::GetCurrentThread(), &created, &exited, &kernel, &user) == 0) {
++        return 0;
++      }
++      const auto value = [](const FILETIME& t) {
++        return (static_cast<std::uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
++      };
++      return value(kernel) + value(user);
++    }
++
++    // AgentBridge_Lap([name]): adds the time since the previous lap (or the start of the step) to the
++    // section `name`, reported in the step's timing as "laps"; without a name it only restarts the
++    // clock. For profiling the script; costs a clock read.
++    int AgentLap(lua_State* const L)
++    {
++      AgentBridgeRuntime& runtime = Runtime();
++      const LARGE_INTEGER now = Now();
++      if (lua_type(L, 1) == LUA_TSTRING && runtime.lapMark.QuadPart != 0) {
++        LARGE_INTEGER frequency{};
++        ::QueryPerformanceFrequency(&frequency);
++        const double ms =
++          static_cast<double>(now.QuadPart - runtime.lapMark.QuadPart) * 1000.0 / static_cast<double>(frequency.QuadPart);
++        const char* const name = lua_tostring(L, 1);
++        auto it = std::find_if(runtime.laps.begin(), runtime.laps.end(), [name](const auto& lap) {
++          return lap.first == name;
++        });
++        if (it == runtime.laps.end()) {
++          runtime.laps.emplace_back(name, ms);
++        } else {
++          it->second += ms;
++        }
++      }
++      runtime.lapMark = now;
++      return 0;
++    }
++
+     // ---------------------------------------------------------------------------------------------
+     // Watchdog. A sim that stops making progress (a script stuck in an endless loop) would otherwise
+     // leave the agent waiting forever. When the sim thread has been busy for /agentwatchdog seconds,
+@@ -931,6 +1033,12 @@ namespace moho
+       const LARGE_INTEGER stepStart = Now();
+       MarkBusy(true);
+       const double simMs = runtime.lastReplyTime.QuadPart != 0 ? MillisecondsSince(runtime.lastReplyTime) : 0.0;
++      const std::uint64_t cpuAtStep = ThreadCpu100ns();
++      const double simCpuMs =
++        runtime.cpuAtLastReply != 0 ? static_cast<double>(cpuAtStep - runtime.cpuAtLastReply) / 10000.0 : 0.0;
++      runtime.laps.clear();
++      runtime.lapMark = stepStart;
++      double observeLuaMs = 0.0;
+ 
+       // ---- build and send the message
+       std::string message;
+@@ -956,6 +1064,8 @@ namespace moho
+           }
+         }
+         runtime.helloSent = true;
++        AGENT_LoadMark("hello");
++        AppendLoadMarks(message);
+       } else {
+         message += "{\"type\":\"obs\",\"tick\":";
+         AppendJsonNumber(message, static_cast<double>(tick));
+@@ -963,7 +1073,9 @@ namespace moho
+         message += ",\"result\":";
+         message += runtime.lastResultJson;
+         message += ",\"obs\":";
+-        if (CallScriptFunction(L, "AgentBridge_Observe", 0, error)) {
++        const bool observed = CallScriptFunction(L, "AgentBridge_Observe", 0, error);
++        observeLuaMs = MillisecondsSince(stepStart);
++        if (observed) {
+           EncodeLuaValue(L, -1, message, 0);
+           lua_settop(L, -2);
+         } else {
+@@ -974,8 +1086,28 @@ namespace moho
+       const double observeMs = MillisecondsSince(stepStart);
+       message += ",\"timing\":{\"simMs\":";
+       AppendJsonNumber(message, simMs);
++      message += ",\"simCpuMs\":";
++      AppendJsonNumber(message, simCpuMs);
+       message += ",\"observeMs\":";
+       AppendJsonNumber(message, observeMs);
++      message += ",\"observeLuaMs\":";
++      AppendJsonNumber(message, observeLuaMs);
++      message += ",\"obsBytes\":";
++      AppendJsonNumber(message, static_cast<double>(message.size()));
++      message += ",\"luaKB\":";
++      AppendJsonNumber(message, static_cast<double>(lua_getgccount(L)));
++      if (!runtime.laps.empty()) {
++        message += ",\"laps\":{";
++        for (std::size_t i = 0; i < runtime.laps.size(); ++i) {
++          if (i > 0) {
++            message.push_back(',');
++          }
++          AppendJsonString(message, runtime.laps[i].first);
++          message.push_back(':');
++          AppendJsonNumber(message, runtime.laps[i].second);
++        }
++        message.push_back('}');
++      }
+       message += ",\"actMs\":";
+       AppendJsonNumber(message, runtime.lastActMs);
+       message += ",\"beatMs\":";
+@@ -1054,6 +1186,7 @@ namespace moho
+       runtime.nextTick = tick + static_cast<std::uint32_t>(waitTicks);
+       runtime.lastActMs = MillisecondsSince(actStart);
+       runtime.lastReplyTime = Now();
++      runtime.cpuAtLastReply = ThreadCpu100ns();
+       MarkBusy(false);
+     }
+   } // namespace
+@@ -1085,6 +1218,17 @@ namespace moho
+     const NetDiagnosticsStarter gNetDiagnosticsStarter{};
+   } // namespace
+ 
++  void AGENT_LoadMark(const char* const phase)
++  {
++    if (!Config().enabled) {
++      return;
++    }
++    const double ms = MillisecondsSinceProcessStart();
++    LoadMarks& marks = Marks();
++    std::lock_guard<std::mutex> guard(marks.lock);
++    marks.marks.emplace_back(phase, ms);
++  }
++
+   void AGENT_OnSimBeatStart()
+   {
+     if (Config().enabled) {
+@@ -1114,6 +1258,7 @@ namespace moho
+     // A new session in this process (or the first one): reload the script into its Lua state and
+     // restart the handshake.
+     if (runtime.scriptState != L) {
++      AGENT_LoadMark("first_beat");
+       runtime.helloSent = false;
+       runtime.nextTick = 0;
+       runtime.lastTick = UINT32_MAX;
+diff --git a/src/sdk/moho/agent/AgentBridge.h b/src/sdk/moho/agent/AgentBridge.h
+index 7dae5c29..8833c4ee 100644
+--- a/src/sdk/moho/agent/AgentBridge.h
++++ b/src/sdk/moho/agent/AgentBridge.h
+@@ -39,6 +39,13 @@ namespace moho
+    * orphaned game instances behind.
+    */
+ 
++  /**
++   * Records that the loading phase `phase` (a string literal) was reached, in milliseconds since the
++   * process started; the next hello message reports the marks ("load"). Any thread; inert without
++   * /agentbridge.
++   */
++  void AGENT_LoadMark(const char* phase);
++
+   /** Called by `Sim::AdvanceBeat` at its start (sim thread); times the beat for the step report. */
+   void AGENT_OnSimBeatStart();
+ 
+diff --git a/src/sdk/moho/sim/CWldSession.cpp b/src/sdk/moho/sim/CWldSession.cpp
+index b1f3c5d8..65be14f9 100644
+--- a/src/sdk/moho/sim/CWldSession.cpp
++++ b/src/sdk/moho/sim/CWldSession.cpp
+@@ -15571,6 +15571,7 @@ namespace moho
+      */
+     void WLD_DoPreload()
+     {
++      AGENT_LoadMark("preload"); // engine addition: agent-bridge load timing (inert without /agentbridge)
+       // ` DoPreload 1` bracket marker: the retail binary constructs one
+       // 12-byte `std::string` literal here purely as a profiler/log marker
+       // and discards it immediately. Preserved 1:1 to keep observable
+@@ -15616,6 +15617,7 @@ namespace moho
+       }
+ 
+       gWldFrameAction = EWldFrameAction::Loading;
++      AGENT_LoadMark("preload_done");
+ 
+       // ` DoPreload 2` bracket marker (paired with the opening marker
+       // above): same profiler/log-string discard pattern.
+@@ -15672,6 +15674,7 @@ namespace moho
+         (void)marker;
+       }
+ 
++      AGENT_LoadMark("loaded");
+       SWldGameData gameData{};
+       (void)loader->LoadGameData(&gameData);
+ 
+@@ -15708,6 +15711,7 @@ namespace moho
+       msvc8::auto_ptr<CWldMap> mapOwner(gameData.mWldMap);
+       gameData = SWldGameData{};
+       CWldSession* const wldSession = WLD_CreateSession(stateOwner, rulesOwner, mapOwner, *sessionInfo);
++      AGENT_LoadMark("session_created");
+ 
+       // The launch info keeps its own copy of the playable map so a restart can
+       // rebuild the session without the terrain resource still being alive.
+@@ -15763,6 +15767,7 @@ namespace moho
+         sessionInfo->mLaunchInfo,
+         sessionInfo->mSourceId
+       ));
++      AGENT_LoadMark("driver_created"); // engine addition: agent-bridge load timing (inert without /agentbridge)
+ 
+       gWldFrameAction = EWldFrameAction::Initialize;
+       if (outContinue != nullptr) {
+@@ -15802,6 +15807,7 @@ namespace moho
+       if (!simDriver->HasSyncData()) {
+         return;
+       }
++      AGENT_LoadMark("first_sync");
+ 
+       CWldSession* const session = gActiveWldSession;
+       if (session != nullptr && session->mState != nullptr) {
+@@ -15843,6 +15849,7 @@ namespace moho
+         }
+       }
+       ::OutputDebugStringA("[INITDIAG] after CreateGameInterface\n");
++      AGENT_LoadMark("game_ui");
+ 
+       // The session info existed only to carry launch parameters into the
+       // session; the session owns everything it needed by now.
+@@ -16409,6 +16416,7 @@ namespace moho
+    */
+   void WLD_BeginSession(msvc8::auto_ptr<SWldSessionInfo> sessionInfo)
+   {
++    AGENT_LoadMark("begin_session"); // engine addition: agent-bridge load timing (inert without /agentbridge)
+     gPendingWldSessionInfo = sessionInfo;
+     gWldFrameAction = EWldFrameAction::Preload;
+   }
+diff --git a/src/sdk/moho/sim/CWldSessionLoaderImpl.cpp b/src/sdk/moho/sim/CWldSessionLoaderImpl.cpp
+index cf294006..c43c48a9 100644
+--- a/src/sdk/moho/sim/CWldSessionLoaderImpl.cpp
++++ b/src/sdk/moho/sim/CWldSessionLoaderImpl.cpp
+@@ -1,4 +1,5 @@
+ #include "CWldSessionLoaderImpl.h"
++#include "moho/agent/AgentBridge.h"
+ #include "platform/X87Precision.h"
+ 
+ #include <cfloat>
+@@ -112,6 +113,7 @@ namespace moho
+         const std::string marker(" World Session Load 1", 21u);
+         (void)marker;
+       }
++      AGENT_LoadMark("load_start"); // engine addition: agent-bridge load timing (inert without /agentbridge)
+ 
+       RRuleGameRules* const createdRules = RRuleGameRules::Create(scenario->mGameMods, loadControl);
+       if (RRuleGameRules* const previousRules = scenario->mGameRules;
+@@ -125,6 +127,7 @@ namespace moho
+         const std::string marker(" World Session Load 2", 21u);
+         (void)marker;
+       }
++      AGENT_LoadMark("rules_loaded");
+ 
+       auto* const createdState = new LuaPlus::LuaState(LuaPlus::LuaState::LIB_BASE);
+       if (LuaPlus::LuaState* const previousState = scenario->mState;
+@@ -168,6 +171,7 @@ namespace moho
+         const std::string marker(" World Session Load 6", 21u);
+         (void)marker;
+       }
++      AGENT_LoadMark("session_lua");
+ 
+       msvc8::auto_ptr<CWldMap> loadedMap(new CWldMap());
+       if (loadedMap->MapLoad(scenario->mMapName.c_str(), scenario->mState, false, *loadControl)) {
+@@ -183,6 +187,7 @@ namespace moho
+         const std::string marker(" World Session Load 7", 21u);
+         (void)marker;
+       }
++      AGENT_LoadMark("map_loaded");
+     }
+ 
+   } // namespace
+diff --git a/src/sdk/moho/sim/SimDriver.cpp b/src/sdk/moho/sim/SimDriver.cpp
+index 6a7c4819..89a3e838 100644
+--- a/src/sdk/moho/sim/SimDriver.cpp
++++ b/src/sdk/moho/sim/SimDriver.cpp
+@@ -1163,8 +1163,10 @@ void CSimDriver::ThreadCreateSim()
+   // A throwing Sim::Create is logged and leaves `mSim` empty, which parks the
+   // driver in Failed below (std::exception, FuncInfo 0x00F29740 try state 0,
+   // handler 0x0073D4C7).
++  AGENT_LoadMark("sim_create"); // engine addition: agent-bridge load timing (inert without /agentbridge)
+   try {
+     mSim.reset(Sim_Create_exxt(boost::SharedPtrRawFromSharedBorrow(mLaunchInfo)));
++    AGENT_LoadMark("sim_created");
+   } catch (const std::exception& error) {
+     gpg::Logf("Sim::Create() crashed: %s", error.what());
+   }
+-- 
+2.55.0.windows.3
+

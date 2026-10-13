@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAF AI training</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #151b23; --panel2: #1b222c; --border: #283040; --text: #e6edf3; --muted: #8b949e;
+    --accent: #58a6ff; --win: #3fb950; --draw: #d29922; --loss: #f85149; --violet: #bc8cff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+           padding: 10px 18px; background: rgba(13,17,23,.96); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 17px; margin: 0 6px 0 0; font-weight: 600; letter-spacing: .2px; }
+  header h1 span { color: var(--accent); }
+  select, input[type=number] { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+           border-radius: 6px; padding: 5px 8px; font: inherit; }
+  label { color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+  .badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
+  .live { background: rgba(63,185,80,.15); color: var(--win); border: 1px solid rgba(63,185,80,.4); }
+  .idle { background: rgba(139,148,158,.12); color: var(--muted); border: 1px solid var(--border); }
+  .muted { color: var(--muted); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 10px; padding: 14px 18px 4px; }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .kpi .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  .kpi .v { font-size: 22px; font-weight: 600; margin-top: 2px; }
+  .kpi .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  nav.tabs { display: flex; gap: 4px; padding: 10px 18px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  nav.tabs button { background: none; color: var(--muted); border: 0; border-bottom: 2px solid transparent;
+           padding: 8px 12px; font: inherit; cursor: pointer; }
+  nav.tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+  main { padding: 14px 18px 40px; }
+  .tab { display: none; }
+  .tab.on { display: block; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 4px; min-width: 0; }
+  .card h3 { margin: 2px 0 2px; font-size: 14px; font-weight: 600; }
+  .card p { margin: 0 0 4px; color: var(--muted); font-size: 12.5px; }
+  .chart { height: 320px; }
+  .chart.tall { height: 460px; }
+  .wide { grid-column: 1 / -1; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; cursor: pointer; position: sticky; top: 0; background: var(--panel); user-select: none; }
+  th:hover { color: var(--text); }
+  td:first-child, th:first-child, td.l, th.l { text-align: left; }
+  .tablewrap { max-height: 640px; overflow: auto; }
+  .o { padding: 1px 7px; border-radius: 8px; font-size: 12px; font-weight: 600; }
+  .o.victory { color: var(--win); background: rgba(63,185,80,.12); }
+  .o.defeat { color: var(--loss); background: rgba(248,81,73,.12); }
+  .o.timeout { color: var(--draw); background: rgba(210,153,34,.12); }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 4px 0 8px; }
+  .err { color: var(--loss); padding: 8px 18px; }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } header { padding: 10px 12px; } main, .kpis { padding-left: 12px; padding-right: 12px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>FAF AI <span>training</span></h1>
+  <select id="run" title="run folder"></select>
+  <span id="livebadge" class="badge idle">idle</span>
+  <label>smoothing <input type="range" id="win" min="5" max="150" value="30"> <span id="winv">30</span> games</label>
+  <label>x-axis <select id="xaxis"><option value="time">time</option><option value="index">game #</option></select></label>
+  <label><input type="checkbox" id="auto" checked> refresh every 30 s</label>
+  <span id="updated" class="muted"></span>
+</header>
+<div id="error" class="err"></div>
+<section id="kpis" class="kpis"></section>
+<nav class="tabs" id="tabs">
+  <button data-tab="results" class="on">Results</button>
+  <button data-tab="learning">Learning</button>
+  <button data-tab="network">Network (neurons)</button>
+  <button data-tab="copying">Copying the teacher</button>
+  <button data-tab="throughput">Throughput</button>
+  <button data-tab="games">Games</button>
+</nav>
+<main>
+  <section class="tab on" id="tab-results">
+    <div class="grid">
+      <div class="card wide"><h3>Win rate over time, per opponent</h3>
+        <p>Rolling share of training games won (solid) and lost (dotted); diamonds are greedy evaluations (share won, size = games). Vertical lines: promotions.</p>
+        <div id="c_winrate" class="chart tall"></div></div>
+      <div class="card"><h3>Evaluations</h3><p>Greedy games at fixed seeds; the same games every time, so they compare over the run.</p>
+        <div id="c_evals" class="chart"></div></div>
+      <div class="card"><h3>Game length</h3><p>Each dot a game; colour = result. Line: rolling mean.</p>
+        <div id="c_length" class="chart"></div></div>
+      <div class="card"><h3>Trades</h3><p>Enemy mass destroyed vs own mass lost per game (rolling mean).</p>
+        <div id="c_trades" class="chart"></div></div>
+      <div class="card"><h3>Reward, by part</h3><p>Rolling mean per game: win/loss (terminal), trades, economy, commander damage.</p>
+        <div id="c_reward" class="chart"></div></div>
+      <div class="card"><h3>Value lead at the end</h3><p>Own minus enemy total value, over their sum (−1…1), per opponent.</p>
+        <div id="c_adv" class="chart"></div></div>
+      <div class="card"><h3>Commander damage</h3><p>Reward for the commander's lost health per game (0 = untouched, −2 = a full health bar).</p>
+        <div id="c_cmd" class="chart"></div></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-learning">
+    <div class="grid">
+      <div class="card"><h3>Learning rate and schedules</h3><p>Learning rate (left); teacher weight, entropy bonus ×100 and shaping weight (right).</p>
+        <div id="c_lr" class="chart"></div></div>
+      <div class="card"><h3>Entropy (randomness) per decision</h3><p>At the acting temperature; the total is what the brake watches.</p>
+        <div id="c_ent" class="chart"></div></div>
+      <div class="card"><h3>KL per update and clipped fraction</h3><p>How far each update moved the policy; target 0.02, an update stops early above 0.03.</p>
+        <div id="c_kl" class="chart"></div></div>
+      <div class="card"><h3>Losses</h3><p>Policy, value and belief losses.</p>
+        <div id="c_loss" class="chart"></div></div>
+      <div class="card"><h3>Teacher distillation loss</h3><p>Log scale (the day run's first attempt logged millions from invalid labels).</p>
+        <div id="c_distill" class="chart"></div></div>
+      <div class="card"><h3>Explained variance</h3><p>How well the value head predicts the returns (1 = perfectly).</p>
+        <div id="c_ev" class="chart"></div></div>
+      <div class="card"><h3>Update cost</h3><p>Seconds per update (left) and peak GPU memory in GB (right).</p>
+        <div id="c_cost" class="chart"></div></div>
+      <div class="card"><h3>Samples and epochs</h3><p>Decisions per update and epochs before the KL stop.</p>
+        <div id="c_epochs" class="chart"></div></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-network">
+    <div class="row"><span class="muted" id="netinfo">loading checkpoints…</span></div>
+    <div class="grid">
+      <div class="card"><h3>Where the weights are</h3><p>Learned numbers per part of the network. Each weight is one connection between two artificial neurons.</p>
+        <div id="c_groups" class="chart tall"></div></div>
+      <div class="card"><h3>What learning changed</h3><p>Relative change of each weight matrix since the reference (the clone), latest checkpoint; the 40 that moved most.</p>
+        <div id="c_change" class="chart tall"></div></div>
+      <div class="card wide"><h3>Change over the run</h3><p>Every weight matrix (rows) at every checkpoint (columns): relative distance from the reference.</p>
+        <div id="c_heat" class="chart tall"></div></div>
+      <div class="card"><h3>Change per part over the run</h3><p>How far each part of the network has moved from the reference, at every checkpoint.</p>
+        <div id="c_norms" class="chart"></div></div>
+      <div class="card"><h3>Weight distribution</h3>
+        <div class="row"><select id="layer"></select></div>
+        <div id="c_hist" class="chart"></div></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-copying">
+    <div class="grid">
+      <div class="card wide"><h3>Agreement with the teacher on held-out games</h3><p>Per argument of a command, while the network was being cloned.</p>
+        <div id="c_clone" class="chart tall"></div></div>
+      <div class="card"><h3>Cloning loss</h3><div id="c_cloneloss" class="chart"></div></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-throughput">
+    <div class="grid">
+      <div class="card wide"><h3>Speed</h3><p>Decisions per second (left) and game-seconds simulated per second (right), all games together.</p>
+        <div id="c_speed" class="chart"></div></div>
+      <div class="card"><h3>Games finished</h3><p>Cumulative, with restarts and game errors.</p>
+        <div id="c_cum" class="chart"></div></div>
+      <div class="card"><h3>Real time per game</h3><p>Wall-clock minutes a game took (rolling mean), per opponent.</p>
+        <div id="c_wall" class="chart"></div></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-games">
+    <div class="row">
+      <label>opponent <select id="f_ai"><option value="">all</option></select></label>
+      <label>result <select id="f_out"><option value="">all</option><option>victory</option><option>defeat</option><option>timeout</option></select></label>
+      <label>kind <select id="f_kind"><option value="">all</option><option value="train">training</option><option value="eval">evaluation</option></select></label>
+      <span class="muted" id="gcount"></span>
+    </div>
+    <div class="card"><div class="tablewrap"><table id="gtable"></table></div></div>
+  </section>
+</main>
+<script>
+const COLORS = {easy: "#58a6ff", medium: "#bc8cff", hard: "#ff7b72", adaptive: "#ffa657", rush: "#f778ba"};
+const OUT = {victory: "#3fb950", defeat: "#f85149", timeout: "#d29922"};
+const HEADS = ["verb", "subject", "blueprint", "enhancement", "option", "count", "place", "cell", "target", "kind"];  // kind: runs before v3
+const S = {runs: [], run: null, data: null, net: null, netRun: null, tab: "results", sort: {k: "time", d: -1}};
+const $ = id => document.getElementById(id);
+
+function layout(extra) {
+  return Object.assign({
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: {color: "#c9d1d9", size: 12},
+    margin: {l: 52, r: 52, t: 10, b: 56}, legend: {orientation: "h", y: -0.24, font: {size: 11}},
+    xaxis: {gridcolor: "#222a35", zerolinecolor: "#2c3542"}, yaxis: {gridcolor: "#222a35", zerolinecolor: "#2c3542"},
+    hovermode: "x unified",
+  }, extra || {});
+}
+const CFG = {displaylogo: false, responsive: true, modeBarButtonsToRemove: ["lasso2d", "select2d"]};
+function plot(id, traces, extra) { Plotly.react($(id), traces, layout(extra), CFG); }
+
+function rolling(vals, w) {
+  const out = []; let sum = 0, n = 0; const q = [];
+  for (const v of vals) {
+    q.push(v); if (v !== null && !isNaN(v)) { sum += v; n++; }
+    if (q.length > w) { const o = q.shift(); if (o !== null && !isNaN(o)) { sum -= o; n--; } }
+    out.push(n ? sum / n : null);
+  }
+  return out;
+}
+const W = () => +$("win").value;
+const xOf = (rows, i) => $("xaxis").value === "time" ? rows.map(r => r.time) : rows.map((r, j) => j + 1);
+const trainGames = () => (S.data.episodes || []).filter(e => e.mode === "ppo" && !e.eval);
+const evalGames = () => (S.data.episodes || []).filter(e => e.eval);
+const byAi = rows => rows.reduce((m, r) => ((m[r.ai] = m[r.ai] || []).push(r), m), {});
+const col = ai => COLORS[ai] || "#8b949e";
+function promoShapes() {
+  const ev = (S.data.events || []).filter(e => e.event === "promotion");
+  return ev.map(e => ({type: "line", xref: $("xaxis").value === "time" ? "x" : "paper", yref: "paper",
+    x0: e.time, x1: e.time, y0: 0, y1: 1, line: {color: "#3fb950", width: 1, dash: "dot"}}))
+    .filter(() => $("xaxis").value === "time");
+}
+
+// ------------------------------------------------------------------ KPIs
+function kpis() {
+  const d = S.data, tr = trainGames(), ups = d.updates || [], st = d.status || [];
+  const last = ups[ups.length - 1] || {}, first = ups[0] || {};
+  const card = (k, v, s) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s || ""}</div></div>`;
+  const rate = (ai) => { const g = tr.filter(e => e.ai === ai).slice(-50); if (!g.length) return null;
+    const w = g.filter(e => e.outcome === "victory").length; return [w, g.length]; };
+  const out = [];
+  const stage = last.stage || (tr.length ? (tr[tr.length - 1].stage === 1 ? "B" : "A") : "–");
+  out.push(card("Stage", stage, stage === "B" ? "vs medium (70 %) and easy" : stage === "A" ? "vs easy" : ""));
+  out.push(card("Update", last.update ?? "–", last.planned_updates ? `of ~${last.planned_updates} planned` : ""));
+  out.push(card("Training games", tr.length, `${(d.episodes || []).filter(e => e.eval).length} evaluation games`));
+  for (const ai of ["easy", "medium"]) {
+    const r = rate(ai);
+    if (r) out.push(card(`Won vs ${ai}`, `${Math.round(100 * r[0] / r[1])} %`, `last ${r[1]} training games`));
+  }
+  const ev = evalGames(); if (ev.length) {
+    const tag = ev[ev.length - 1].tag, g = ev.filter(e => e.tag === tag);
+    const parts = Object.entries(byAi(g)).map(([ai, rs]) => `${ai} ${rs.filter(e => e.outcome === "victory").length}/${rs.length}`);
+    out.push(card("Last evaluation", tag, parts.join(" · ")));
+  }
+  if (ups.length) out.push(card("Entropy", (last.entropy ?? 0).toFixed(2), `first update ${(first.entropy ?? 0).toFixed(2)}`));
+  if (ups.length) out.push(card("Update cost", `${(last.seconds ?? 0).toFixed(0)} s`, `peak ${(last.peak_gb ?? 0).toFixed(1)} GB · KL ${(last.approx_kl ?? 0).toFixed(3)}`));
+  if (st.length) { const s = st[st.length - 1]; out.push(card("Speed", `${s.decisions_s.toFixed(0)}/s`, `${s.game_s.toFixed(0)} game-s/s · restarts ${s.restarts}`)); }
+  if (d.stop_at) { const left = (new Date(d.stop_at.replace(" ", "T")) - new Date()) / 60000;
+    out.push(card("Stops at", d.stop_at.slice(11), left > 0 ? `${Math.floor(left / 60)} h ${Math.round(left % 60)} min left` : "ended")); }
+  const errs = (d.events || []).filter(e => e.event === "game_error").length;
+  out.push(card("Game errors", errs, errs ? (d.events.filter(e => e.error).slice(-1)[0]?.error || "") .slice(0, 60) : "none"));
+  $("kpis").innerHTML = out.join("");
+  const lastT = st.length ? new Date(st[st.length - 1].t) : null;
+  const live = lastT && (new Date() - lastT) < 4 * 60000;
+  $("livebadge").className = "badge " + (live ? "live" : "idle"); $("livebadge").textContent = live ? "● live" : "idle";
+}
+
+// ------------------------------------------------------------------ results
+function results() {
+  const tr = trainGames(), w = W(), groups = byAi(tr), traces = [];
+  for (const [ai, rows] of Object.entries(groups)) {
+    const x = xOf(rows);
+    traces.push({x, y: rolling(rows.map(r => r.outcome === "victory" ? 1 : 0), w), name: `won vs ${ai}`,
+                 line: {color: col(ai), width: 2.4}, hovertemplate: "%{y:.0%}"});
+    traces.push({x, y: rolling(rows.map(r => r.outcome === "defeat" ? 1 : 0), w), name: `lost vs ${ai}`,
+                 line: {color: col(ai), width: 1.4, dash: "dot"}, hovertemplate: "%{y:.0%}"});
+  }
+  const ev = evalGames(), tags = [...new Set(ev.map(e => e.tag))];
+  for (const [ai, _] of Object.entries(byAi(ev))) {
+    const pts = tags.map(t => { const g = ev.filter(e => e.tag === t && e.ai === ai); if (!g.length) return null;
+      return {x: g[g.length - 1].time, y: g.filter(e => e.outcome === "victory").length / g.length, n: g.length, t}; }).filter(Boolean);
+    if ($("xaxis").value === "time" && pts.length)
+      traces.push({x: pts.map(p => p.x), y: pts.map(p => p.y), mode: "markers", name: `eval vs ${ai}`,
+                   marker: {symbol: "diamond", size: pts.map(p => 8 + p.n), color: col(ai), line: {color: "#fff", width: 1}},
+                   text: pts.map(p => `${p.t}: ${Math.round(p.y * p.n)}/${p.n}`), hovertemplate: "%{text}"});
+  }
+  plot("c_winrate", traces, {yaxis: {range: [-0.02, 1.02], tickformat: ".0%", gridcolor: "#222a35"}, shapes: promoShapes()});
+
+  const evTraces = [];
+  for (const [ai, rows] of Object.entries(byAi(ev))) {
+    const t = tags.filter(tg => rows.some(r => r.tag === tg));
+    const y = t.map(tg => { const g = rows.filter(r => r.tag === tg); return g.filter(e => e.outcome === "victory").length / g.length; });
+    const txt = t.map(tg => { const g = rows.filter(r => r.tag === tg); return `${g.filter(e => e.outcome === "victory").length}/${g.length}`; });
+    evTraces.push({type: "bar", x: t, y, name: ai, marker: {color: col(ai)}, text: txt, textposition: "outside", hovertemplate: "%{text}"});
+  }
+  plot("c_evals", evTraces, {barmode: "group", yaxis: {range: [0, 1.15], tickformat: ".0%", gridcolor: "#222a35"}, hovermode: "closest"});
+
+  const x = xOf(tr);
+  plot("c_length", [
+    ...Object.entries(OUT).map(([o, c]) => { const rs = tr.filter(r => r.outcome === o);
+      return {x: $("xaxis").value === "time" ? rs.map(r => r.time) : rs.map(r => tr.indexOf(r) + 1), y: rs.map(r => r.minutes),
+              mode: "markers", name: o, marker: {color: c, size: 5, opacity: .55}, hovertemplate: "%{y:.1f} min"}; }),
+    {x, y: rolling(tr.map(r => r.minutes), w), name: "mean", line: {color: "#e6edf3", width: 2}, hovertemplate: "%{y:.1f} min"}],
+    {yaxis: {title: "minutes", gridcolor: "#222a35"}, hovermode: "closest"});
+  plot("c_trades", [
+    {x, y: rolling(tr.map(r => r.destroyed), w), name: "destroyed", line: {color: "#3fb950", width: 2}},
+    {x, y: rolling(tr.map(r => r.lost), w), name: "lost", line: {color: "#f85149", width: 2}}],
+    {yaxis: {title: "mass", gridcolor: "#222a35"}});
+  const parts = ["terminal", "trade", "economy", "commander"], pc = ["#58a6ff", "#3fb950", "#d29922", "#f85149"];
+  plot("c_reward", parts.map((p, i) => ({x, y: rolling(tr.map(r => (r.comp || {})[p] ?? null), w), name: p,
+       line: {color: pc[i], width: 2}})), {});
+  plot("c_adv", Object.entries(groups).map(([ai, rows]) => ({x: xOf(rows), y: rolling(rows.map(r => r.adv), w), name: ai,
+       line: {color: col(ai), width: 2}})), {yaxis: {range: [-1, 1], gridcolor: "#222a35"}});
+  plot("c_cmd", Object.entries(groups).map(([ai, rows]) => ({x: xOf(rows), y: rolling(rows.map(r => (r.comp || {}).commander ?? null), w),
+       name: ai, line: {color: col(ai), width: 2}})), {yaxis: {gridcolor: "#222a35"}});
+}
+
+// ------------------------------------------------------------------ learning
+function learning() {
+  const u = S.data.updates || []; if (!u.length) return;
+  const x = u.map(r => r.update);
+  plot("c_lr", [
+    {x, y: u.map(r => r.lr), name: "learning rate", line: {color: "#58a6ff", width: 2.4}},
+    {x, y: u.map(r => r.distill_beta), name: "teacher weight", yaxis: "y2", line: {color: "#bc8cff", width: 2}},
+    {x, y: u.map(r => (r.ent_coef || 0) * 100), name: "entropy bonus ×100", yaxis: "y2", line: {color: "#d29922", width: 2}},
+    {x, y: u.map(r => r.shaping), name: "shaping weight", yaxis: "y2", line: {color: "#3fb950", width: 2, dash: "dot"}}],
+    {yaxis: {title: "learning rate", exponentformat: "e", gridcolor: "#222a35"}, yaxis2: {overlaying: "y", side: "right", range: [0, 1.05]}, xaxis: {title: "update"}});
+  const hc = ["#58a6ff", "#bc8cff", "#3fb950", "#39c5cf", "#e3b341", "#8b949e", "#ffa657", "#d29922", "#f778ba", "#6e7681"];
+  plot("c_ent", [{x, y: u.map(r => r.entropy), name: "total", line: {color: "#e6edf3", width: 2.6}},
+    ...HEADS.map((h, i) => ({x, y: u.map(r => r["entropy_" + h] ?? null), name: h, line: {color: hc[i], width: 1.5}}))],
+    {xaxis: {title: "update"}});
+  plot("c_kl", [{x, y: u.map(r => r.approx_kl), name: "KL", line: {color: "#58a6ff", width: 2}},
+    {x, y: u.map(r => r.clipfrac), name: "clipped fraction", yaxis: "y2", line: {color: "#d29922", width: 1.5}}],
+    {shapes: [0.02, 0.03].map((v, i) => ({type: "line", xref: "paper", x0: 0, x1: 1, y0: v, y1: v,
+      line: {color: i ? "#f85149" : "#3fb950", width: 1, dash: "dash"}})),
+     yaxis2: {overlaying: "y", side: "right", range: [0, 0.6]}, xaxis: {title: "update"}});
+  plot("c_loss", [{x, y: u.map(r => r.pg_loss), name: "policy", line: {color: "#58a6ff"}},
+    {x, y: u.map(r => r.v_loss), name: "value", line: {color: "#3fb950"}},
+    {x, y: u.map(r => r.belief_loss), name: "belief", line: {color: "#bc8cff"}}], {xaxis: {title: "update"}});
+  plot("c_distill", [{x, y: u.map(r => Math.max(1e-3, r.distill_loss || 1e-3)), name: "distillation", line: {color: "#bc8cff", width: 2}}],
+    {yaxis: {type: "log", gridcolor: "#222a35"}, xaxis: {title: "update"}});
+  plot("c_ev", [{x, y: u.map(r => r.explained_variance), name: "explained variance", line: {color: "#3fb950", width: 2}}],
+    {yaxis: {range: [-0.5, 1.02], gridcolor: "#222a35"}, xaxis: {title: "update"}});
+  plot("c_cost", [{x, y: u.map(r => r.seconds), name: "seconds", type: "bar", marker: {color: "#58a6ff"}},
+    {x, y: u.map(r => r.peak_gb), name: "peak GB", yaxis: "y2", line: {color: "#f85149", width: 2}}],
+    {yaxis2: {overlaying: "y", side: "right"}, xaxis: {title: "update"}});
+  plot("c_epochs", [{x, y: u.map(r => r.samples), name: "samples", line: {color: "#58a6ff"}},
+    {x, y: u.map(r => r.epochs_run), name: "epochs", yaxis: "y2", type: "bar", marker: {color: "#bc8cff", opacity: .5}}],
+    {yaxis2: {overlaying: "y", side: "right", range: [0, 4]}, xaxis: {title: "update"}});
+}
+
+// ------------------------------------------------------------------ network
+async function network(force) {
+  if (!S.run) return;
+  if (!S.net || S.netRun !== S.run || force) {
+    $("netinfo").textContent = "loading checkpoints (a few seconds)…";
+    const r = await fetch(`/api/network?name=${encodeURIComponent(S.run)}`).then(r => r.json());
+    if (r.error) { $("netinfo").textContent = r.error; return; }
+    S.net = r; S.netRun = S.run;
+    const sel = $("layer"); sel.innerHTML = r.layers.filter(l => l.shape.length > 1)
+      .map(l => `<option>${l.name}</option>`).join("");
+  }
+  const n = S.net, lastCk = n.checkpoints[n.checkpoints.length - 1];
+  const meta = n.meta[lastCk] || {};
+  $("netinfo").textContent = `${(n.total_params / 1e6).toFixed(2)} M weights in ${n.layers.length} tensors · reference: ${n.reference} · ` +
+    `checkpoints: ${n.checkpoints.join(", ")}` + (meta.update != null ? ` · latest at update ${meta.update}` : "");
+  const g = n.groups.slice().reverse();
+  plot("c_groups", [{type: "bar", orientation: "h", y: g.map(x => x.group), x: g.map(x => x.params),
+    marker: {color: "#58a6ff"}, hovertemplate: "%{x:,} weights<extra></extra>"}],
+    {margin: {l: 130, r: 20, t: 10, b: 40}, hovermode: "closest", yaxis: {dtick: 1, tickfont: {size: 10}, gridcolor: "#222a35"}});
+  // weight matrices only: biases start near zero, so their relative change says little
+  const ch = n.layers.filter(l => l.shape.length > 1).map(l => ({name: l.name, v: l.change[lastCk] ?? 0}))
+    .sort((a, b) => b.v - a.v).slice(0, 40).reverse();
+  plot("c_change", [{type: "bar", orientation: "h", y: ch.map(c => c.name), x: ch.map(c => c.v),
+    marker: {color: ch.map(c => c.v), colorscale: "Viridis"}, hovertemplate: "%{x:.4f}"}],
+    {margin: {l: 260, r: 20, t: 10, b: 40}, hovermode: "closest", xaxis: {title: "‖W − W_ref‖ / ‖W_ref‖"}});
+  const rows = n.layers.filter(l => l.shape.length > 1);
+  plot("c_heat", [{type: "heatmap", x: n.checkpoints, y: rows.map(l => l.name),
+    z: rows.map(l => n.checkpoints.map(c => l.change[c] ?? null)), colorscale: "Inferno", hovertemplate: "%{y}<br>%{x}: %{z:.4f}<extra></extra>"}],
+    {margin: {l: 260, r: 20, t: 10, b: 60}, hovermode: "closest", yaxis: {tickfont: {size: 9}, automargin: false}});
+  const groups = [...new Set(n.layers.map(l => l.group))];
+  // per part: the size of its change relative to its size at the reference (weight matrices only)
+  const refCk = n.checkpoints[0];
+  plot("c_norms", groups.map(gr => { const ls = n.layers.filter(l => l.group === gr && l.shape.length > 1);
+      const base = Math.sqrt(ls.reduce((s, l) => s + (l.norm[refCk] || 0) ** 2, 0)) || 1;
+      return {x: n.checkpoints, y: n.checkpoints.map(c => Math.sqrt(ls.reduce((s, l) => s + ((l.change[c] || 0) * (l.norm[refCk] || 0)) ** 2, 0)) / base),
+              name: gr, mode: "lines+markers"}; }).filter(tr => tr.y.some(v => v > 0)),
+    {legend: {font: {size: 9}, orientation: "v", x: 1.02, y: 1}, hovermode: "closest", margin: {l: 52, r: 140, t: 10, b: 40}});
+  hist();
+}
+async function hist() {
+  const layer = $("layer").value; if (!layer) return;
+  const r = await fetch(`/api/hist?name=${encodeURIComponent(S.run)}&layer=${encodeURIComponent(layer)}`).then(r => r.json());
+  if (r.error) return;
+  plot("c_hist", [{type: "bar", x: r.centers, y: r.first, name: r.first_label, marker: {color: "#8b949e", opacity: .6}},
+    {type: "bar", x: r.centers, y: r.last, name: r.last_label, marker: {color: "#58a6ff", opacity: .6}}],
+    {barmode: "overlay", bargap: 0, hovermode: "closest", xaxis: {title: "weight value"}});
+}
+
+// ------------------------------------------------------------------ copying, throughput, games
+function copying() {
+  const c = S.data.clone || [];
+  const note = S.data.clone_from ? ` (this run started from a clone made in ${S.data.clone_from})` : "";
+  document.querySelector("#tab-copying .card p").textContent = "Per argument of a command, while the network was being cloned" + note + ".";
+  if (!c.length) { Plotly.purge($("c_clone")); return; }
+  const keys = ["verb", "subject", "set_unit", "blueprint", "enhancement", "option", "kind", "place", "anchor", "cell", "cell_near", "spot", "target"];
+  const kc = ["#e6edf3", "#58a6ff", "#79c0ff", "#3fb950", "#39c5cf", "#e3b341", "#ffa657", "#f778ba", "#bc8cff", "#d2a8ff", "#d29922", "#f85149", "#6e7681"];
+  plot("c_clone", keys.filter(k => c.some(r => r[k] != null)).map((k, i) => ({x: c.map(r => r.step), y: c.map(r => r[k] ?? null),
+    name: k, line: {color: kc[i], width: 2}})), {yaxis: {tickformat: ".0%", gridcolor: "#222a35"}, xaxis: {title: "step"}});
+  plot("c_cloneloss", [{x: c.map(r => r.step), y: c.map(r => r.loss), name: "training loss", line: {color: "#58a6ff"}},
+    {x: c.map(r => r.step), y: c.map(r => r.value_mse ?? null), name: "value error", yaxis: "y2", line: {color: "#3fb950"}}],
+    {yaxis2: {overlaying: "y", side: "right"}, xaxis: {title: "step"}});
+}
+function throughput() {
+  const s = S.data.status || [], tr = trainGames();
+  plot("c_speed", [{x: s.map(r => r.t), y: s.map(r => r.decisions_s), name: "decisions/s", line: {color: "#58a6ff", width: 2}},
+    {x: s.map(r => r.t), y: s.map(r => r.game_s), name: "game-s/s", yaxis: "y2", line: {color: "#3fb950", width: 1.5}}],
+    {yaxis2: {overlaying: "y", side: "right"}});
+  const errs = (S.data.events || []).filter(e => e.event === "game_error");
+  plot("c_cum", [{x: s.map(r => r.t), y: s.map(r => r.episodes), name: "games", line: {color: "#58a6ff", width: 2}},
+    {x: s.map(r => r.t), y: s.map(r => r.restarts), name: "restarts", yaxis: "y2", line: {color: "#f85149", shape: "hv"}},
+    {x: errs.map(e => e.time), y: errs.map(() => 0), mode: "markers", name: "game error", yaxis: "y2",
+     marker: {color: "#f85149", symbol: "x", size: 9}, text: errs.map(e => e.error), hovertemplate: "%{text}"}],
+    {yaxis2: {overlaying: "y", side: "right", rangemode: "tozero"}});
+  plot("c_wall", Object.entries(byAi(tr)).map(([ai, rows]) => ({x: xOf(rows), y: rolling(rows.map(r => (r.wall || 0) / 60), W()),
+    name: ai, line: {color: col(ai), width: 2}})), {yaxis: {title: "minutes", gridcolor: "#222a35"}});
+}
+function games() {
+  const all = (S.data.episodes || []).filter(e => e.mode === "ppo" || e.eval);
+  const ais = [...new Set(all.map(e => e.ai))]; const fa = $("f_ai");
+  if (fa.options.length !== ais.length + 1) fa.innerHTML = `<option value="">all</option>` + ais.map(a => `<option>${a}</option>`).join("");
+  let rows = all.filter(e => (!$("f_ai").value || e.ai === $("f_ai").value) && (!$("f_out").value || e.outcome === $("f_out").value)
+    && (!$("f_kind").value || ($("f_kind").value === "eval") === e.eval));
+  const cols = [["time", "time", "l"], ["update", "update"], ["tag", "kind", "l"], ["ai", "opponent", "l"], ["faction", "faction"],
+    ["outcome", "result", "l"], ["minutes", "minutes"], ["return", "return"], ["destroyed", "destroyed"], ["lost", "lost"],
+    ["adv", "value lead"], ["cmd", "commander"], ["seed", "seed"]];
+  rows = rows.map(e => Object.assign({}, e, {cmd: (e.comp || {}).commander ?? null, tag: e.eval ? e.tag : "training"}));
+  const {k, d} = S.sort;
+  rows.sort((a, b) => (a[k] > b[k] ? 1 : a[k] < b[k] ? -1 : 0) * d);
+  $("gcount").textContent = `${rows.length} games`;
+  const fmt = (c, v) => v == null ? "" : c === "time" ? v.slice(5, 16).replace("T", " ") : typeof v === "number" && !Number.isInteger(v) ? v.toFixed(2) : v;
+  $("gtable").innerHTML = `<thead><tr>${cols.map(([c, n, l]) => `<th class="${l || ""}" data-k="${c}">${n}${S.sort.k === c ? (S.sort.d > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead>` +
+    `<tbody>${rows.slice(0, 600).map(r => `<tr>${cols.map(([c, , l]) => c === "outcome" ? `<td class="l"><span class="o ${r.outcome}">${r.outcome}</span></td>`
+      : `<td class="${l || ""}">${fmt(c, r[c])}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  $("gtable").querySelectorAll("th").forEach(th => th.onclick = () => {
+    S.sort = {k: th.dataset.k, d: S.sort.k === th.dataset.k ? -S.sort.d : -1}; games(); });
+}
+
+// ------------------------------------------------------------------ plumbing
+function render() {
+  if (!S.data) return;
+  kpis();
+  if (S.tab === "results") results();
+  if (S.tab === "learning") learning();
+  if (S.tab === "network") network(false);
+  if (S.tab === "copying") copying();
+  if (S.tab === "throughput") throughput();
+  if (S.tab === "games") games();
+}
+async function loadRun() {
+  if (!S.run) return;
+  try {
+    const d = await fetch(`/api/run?name=${encodeURIComponent(S.run)}`).then(r => r.json());
+    if (d.error) throw new Error(d.error);
+    S.data = d; $("error").textContent = "";
+    $("updated").textContent = "updated " + new Date().toLocaleTimeString();
+    render();
+  } catch (e) { $("error").textContent = "could not load the run: " + e.message; }
+}
+async function loadRuns() {
+  S.runs = await fetch("/api/runs").then(r => r.json());
+  const sel = $("run"), cur = S.run || localStorage.getItem("run");
+  sel.innerHTML = S.runs.map(r => `<option value="${r.name}">${r.name}  (${r.modified.slice(5, 16).replace("T", " ")})</option>`).join("");
+  S.run = S.runs.some(r => r.name === cur) ? cur : (S.runs.find(r => r.tools) || S.runs[0] || {}).name;
+  sel.value = S.run;
+}
+$("run").onchange = () => { S.run = $("run").value; try { localStorage.setItem("run", S.run); } catch (e) {} S.net = null; loadRun(); };
+$("win").oninput = () => { $("winv").textContent = W(); render(); };
+$("xaxis").onchange = render;
+$("layer").onchange = hist;
+["f_ai", "f_out", "f_kind"].forEach(id => $(id).onchange = games);
+$("tabs").querySelectorAll("button").forEach(b => b.onclick = () => {
+  $("tabs").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.id === "tab-" + b.dataset.tab));
+  S.tab = b.dataset.tab; render(); window.dispatchEvent(new Event("resize"));
+});
+setInterval(() => { if ($("auto").checked) { loadRun(); if (S.tab === "network") network(true); } }, 30000);
+(async () => { await loadRuns(); await loadRun(); })();
+</script>
+</body>
+</html>

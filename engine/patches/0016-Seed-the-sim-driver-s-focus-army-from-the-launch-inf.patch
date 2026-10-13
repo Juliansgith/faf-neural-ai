@@ -1,0 +1,58 @@
+From d8b93f66b93048b550ce8cb3566ada7db7bdf550 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 16:39:23 +0200
+Subject: [PATCH 16/56] Seed the sim driver's focus army from the launch info,
+ not the source id
+
+CSimDriver's constructor seeds the pending sync filter's focus army from
+the launch info's original source ([launchInfo+0x68] =
+mCommandSources.mOriginalSource, 0x0073B7CC-0x0073B7DC) and leaves the
+active filter at -1 (0x0073B6C2). The recovery used the command source id
+for both.
+
+The two only agree in single-player skirmish. In a replay the source id is
+0xFF while the original source is -1, so the sim got focus army 255 and
+the first focus-army lookup read past the army list:
+CreateLightParticleIntel dereferenced a null army at beat 31 of every
+replay. In multiplayer the source id is the client's slot, not the local
+player's army index.
+
+(cherry picked from commit bd34c1590f85e510516956a7d8554cd11e5adad8)
+
+Ported onto 8977bb9d: upstream's CSimDriver lock is now an embedded boost::mutex, so the removed 'mLock.lock = new boost::mutex()' line is simply gone.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ src/sdk/moho/sim/SimDriver.cpp | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/sdk/moho/sim/SimDriver.cpp b/src/sdk/moho/sim/SimDriver.cpp
+index f17bcbd6..745829d1 100644
+--- a/src/sdk/moho/sim/SimDriver.cpp
++++ b/src/sdk/moho/sim/SimDriver.cpp
+@@ -32,6 +32,7 @@
+ #include "moho/misc/Stats.h"
+ #include "moho/misc/TimeBar.h"
+ #include "moho/misc/CDecoder.h"
++#include "moho/misc/LaunchInfoBase.h"
+ #include "moho/net/CClientManagerImpl.h"
+ #include "moho/render/CDecalTypes.h"
+ #include "moho/sim/SSTIArmyConstantData.h"
+@@ -737,8 +738,11 @@ CSimDriver::CSimDriver(
+   , mSimSpeedSamples{}
+   , mCurrentSimRate(10)
+ {
+-  mPendingSyncFilter.focusArmy = static_cast<int32_t>(commandSourceId);
+-  mActiveSyncFilter.focusArmy = static_cast<int32_t>(commandSourceId);
++  // 0x0073B7CC-0x0073B7DC: the pending filter's focus army is the launch info's original source
++  // (the local player's army; -1 for replays), not the command source id -- in a replay that id is
++  // 0xFF and would make every focus-army lookup read past the army list. The active filter keeps
++  // its -1 (0x0073B6C2).
++  mPendingSyncFilter.focusArmy = launchInfo ? launchInfo->mCommandSources.mOriginalSource : -1;
+ 
+   mConnectionEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+   mSyncDataAvailableEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+-- 
+2.55.0.windows.3
+

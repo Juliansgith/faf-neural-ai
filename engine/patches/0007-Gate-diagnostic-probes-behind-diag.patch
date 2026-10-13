@@ -1,0 +1,296 @@
+From 105e9d258c5d5ee362b0d7ac7adee23bfbc94c8e Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 15:12:40 +0200
+Subject: [PATCH 07/56] Gate diagnostic probes behind /diag
+
+The tree carries many temporary probes that log through Logf/Warnf/Debugf
+with a bracketed tag ([STEERDIAG], [MOTDIAG], ...) -- some per unit per tick,
+hundreds of thousands of lines a minute -- plus probes that append to
+faf_diag.log and a mirror of every warning to OutputDebugStringA.
+
+They are now dropped before formatting unless the game runs with /diag
+(gpg::LogDiagnosticsEnabled, overridable with SetLogDiagnosticsEnabled). A
+17-minute four-AI skirmish logs about 1,000 lines instead of about 936,000.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 31f5abbc4285f60aca6988514c4c73a8c2886ef3)
+---
+ src/sdk/gpg/core/utils/Logging.cpp            | 85 ++++++++++++++++++-
+ src/sdk/gpg/core/utils/Logging.h              | 16 ++++
+ .../effects/rendering/CEffectManagerImpl.cpp  |  2 +-
+ src/sdk/moho/effects/rendering/CEfxBeam.cpp   |  2 +-
+ .../sim/CArmyLuaFunctionRegistrations.cpp     |  4 +-
+ src/sdk/moho/sim/CWldSession.cpp              |  2 +-
+ src/sdk/moho/sim/Sim.cpp                      |  2 +-
+ src/sdk/moho/unit/core/UnitWeapon.cpp         |  2 +-
+ src/sdk/moho/unit/tasks/CUnitLoadUnits.cpp    |  2 +-
+ 9 files changed, 108 insertions(+), 9 deletions(-)
+
+diff --git a/src/sdk/gpg/core/utils/Logging.cpp b/src/sdk/gpg/core/utils/Logging.cpp
+index 489c163a..7d20dfca 100644
+--- a/src/sdk/gpg/core/utils/Logging.cpp
++++ b/src/sdk/gpg/core/utils/Logging.cpp
+@@ -11,6 +11,7 @@
+ #include <Windows.h>
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cstdarg>
+ #include <cstddef>
+ #include <cstdint>
+@@ -1210,7 +1211,7 @@ void LogContext::Dispatch(const LogSeverity level, const msvc8::string& msg)
+     // those probes are readable in the VS Output window with no extra setup.
+     // Info/Debug are deliberately excluded: they are high-volume and would
+     // flood the window.
+-    if (level >= LogSeverity::Warn && head.next == &head) {
++    if (level >= LogSeverity::Warn && head.next == &head && LogDiagnosticsEnabled()) {
+         ::OutputDebugStringA(msg.c_str());
+         ::OutputDebugStringA("\n");
+     }
+@@ -1465,6 +1466,76 @@ void gpg::LogScopeEntry::Emit()
+     body.clear();
+ }
+ 
++namespace
++{
++  // -1 = not resolved yet, 0 = off, 1 = on. Resolved lazily from the process command line so it
++  // works before the engine's own option parsing (logging starts during static initialisation).
++  std::atomic<int> gLogDiagnosticsState{-1};
++
++  [[nodiscard]] bool CommandLineHasDiagSwitch() noexcept
++  {
++    const char* const commandLine = ::GetCommandLineA();
++    if (commandLine == nullptr) {
++      return false;
++    }
++    const char* const token = "/diag";
++    const std::size_t tokenLength = std::strlen(token);
++    for (const char* p = commandLine; *p != '\0'; ++p) {
++      const bool atTokenStart = (p == commandLine) || p[-1] == ' ' || p[-1] == '\t' || p[-1] == '"';
++      if (atTokenStart && ::_strnicmp(p, token, tokenLength) == 0) {
++        const char after = p[tokenLength];
++        if (after == '\0' || after == ' ' || after == '\t' || after == '"') {
++          return true;
++        }
++      }
++    }
++    return false;
++  }
++} // namespace
++
++/**
++ * Engine addition (see Logging.h): whether bracket-tagged diagnostic probes are logged.
++ */
++bool gpg::LogDiagnosticsEnabled() noexcept
++{
++  int state = gLogDiagnosticsState.load(std::memory_order_relaxed);
++  if (state < 0) {
++    state = CommandLineHasDiagSwitch() ? 1 : 0;
++    gLogDiagnosticsState.store(state, std::memory_order_relaxed);
++  }
++  return state != 0;
++}
++
++/**
++ * Engine addition (see Logging.h).
++ */
++void gpg::SetLogDiagnosticsEnabled(const bool enabled) noexcept
++{
++  gLogDiagnosticsState.store(enabled ? 1 : 0, std::memory_order_relaxed);
++}
++
++/**
++ * Engine addition (see Logging.h).
++ */
++bool gpg::IsDiagnosticProbeText(const char* const text) noexcept
++{
++  if (text == nullptr || text[0] != '[') {
++    return false;
++  }
++  int length = 0;
++  for (const char* p = text + 1; *p != '\0'; ++p, ++length) {
++    const char c = *p;
++    if (c == ']') {
++      return length >= 3;
++    }
++    const bool tagChar = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
++    if (!tagChar) {
++      return false;
++    }
++  }
++  return false;
++}
++
+ /**
+  * Address: 0x00937C00 (FUN_00937C00, gpg::LogMessage)
+  *
+@@ -1473,6 +1544,9 @@ void gpg::LogScopeEntry::Emit()
+  */
+ void gpg::LogMessage(const LogSeverity level, const msvc8::string& message)
+ {
++    if (IsDiagnosticProbeText(message.c_str()) && !LogDiagnosticsEnabled()) {
++        return;
++    }
+     std::call_once(g_LogOnce, &InitLogSingleton);
+     if (g_LogCtx) {
+         g_LogCtx->Dispatch(level, message);
+@@ -1487,6 +1561,9 @@ void gpg::LogMessage(const LogSeverity level, const msvc8::string& message)
+  */
+ void gpg::Logf(const char* fmt, ...)
+ {
++    if (IsDiagnosticProbeText(fmt) && !LogDiagnosticsEnabled()) {
++        return;
++    }
+     va_list va;
+     va_start(va, fmt);
+     const msvc8::string msg = STR_Va(fmt, va);
+@@ -1506,6 +1583,9 @@ void gpg::Logf(const char* fmt, ...)
+  */
+ void gpg::Warnf(const char* fmt, ...)
+ {
++    if (IsDiagnosticProbeText(fmt) && !LogDiagnosticsEnabled()) {
++        return;
++    }
+     va_list va;
+     va_start(va, fmt);
+     const msvc8::string msg = STR_Va(fmt, va);
+@@ -1525,6 +1605,9 @@ void gpg::Warnf(const char* fmt, ...)
+  */
+ void gpg::Debugf(const char* fmt, ...)
+ {
++    if (IsDiagnosticProbeText(fmt) && !LogDiagnosticsEnabled()) {
++        return;
++    }
+     va_list va;
+     va_start(va, fmt);
+     const msvc8::string msg = STR_Va(fmt, va);
+diff --git a/src/sdk/gpg/core/utils/Logging.h b/src/sdk/gpg/core/utils/Logging.h
+index 0470c1ea..30b1874e 100644
+--- a/src/sdk/gpg/core/utils/Logging.h
++++ b/src/sdk/gpg/core/utils/Logging.h
+@@ -588,6 +588,22 @@ namespace gpg
+      */
+     void Debugf(const char* fmt, ...);
+ 
++    /**
++     * Engine addition, not recovered from the binary.
++     *
++     * The recovery tree still carries diagnostic probes that log through Logf/Warnf/Debugf with a
++     * bracketed upper-case tag at the start of the format string (`[STEERDIAG] ...`,
++     * `[MOTDIAG] ...`). Some fire per unit per tick -- hundreds of thousands of lines a minute -- so
++     * they are dropped before formatting unless the `/diag` command-line switch is present.
++     */
++    [[nodiscard]] bool LogDiagnosticsEnabled() noexcept;
++
++    /** Overrides the `/diag` switch at run time (engine addition). */
++    void SetLogDiagnosticsEnabled(bool enabled) noexcept;
++
++    /** True when `text` starts with a probe tag: `[`, three or more of A-Z 0-9 _, then `]`. */
++    [[nodiscard]] bool IsDiagnosticProbeText(const char* text) noexcept;
++
+     /**
+      * Address: 0x008E4A40 (?EnableLogHistory@gpg@@YAXH@Z)
+      *
+diff --git a/src/sdk/moho/effects/rendering/CEffectManagerImpl.cpp b/src/sdk/moho/effects/rendering/CEffectManagerImpl.cpp
+index 1ff20d63..1e46f82d 100644
+--- a/src/sdk/moho/effects/rendering/CEffectManagerImpl.cpp
++++ b/src/sdk/moho/effects/rendering/CEffectManagerImpl.cpp
+@@ -36,7 +36,7 @@ namespace
+   // probes below append here instead. The file lands beside the executable.
+   void DiagLine(const char* const fmt, ...)
+   {
+-    std::FILE* const sink = std::fopen("faf_diag.log", "a");
++    std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+     if (sink == nullptr) {
+       return;
+     }
+diff --git a/src/sdk/moho/effects/rendering/CEfxBeam.cpp b/src/sdk/moho/effects/rendering/CEfxBeam.cpp
+index b26c83c3..2e4a8a69 100644
+--- a/src/sdk/moho/effects/rendering/CEfxBeam.cpp
++++ b/src/sdk/moho/effects/rendering/CEfxBeam.cpp
+@@ -35,7 +35,7 @@ namespace
+   // probes below append here instead. The file lands beside the executable.
+   void DiagLine(const char* const fmt, ...)
+   {
+-    std::FILE* const sink = std::fopen("faf_diag.log", "a");
++    std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+     if (sink == nullptr) {
+       return;
+     }
+diff --git a/src/sdk/moho/sim/CArmyLuaFunctionRegistrations.cpp b/src/sdk/moho/sim/CArmyLuaFunctionRegistrations.cpp
+index 82e61355..fb86d4da 100644
+--- a/src/sdk/moho/sim/CArmyLuaFunctionRegistrations.cpp
++++ b/src/sdk/moho/sim/CArmyLuaFunctionRegistrations.cpp
+@@ -521,7 +521,7 @@ namespace moho
+     // TEMPORARY PROBE -- records whether the unit-cap gate this path used to go
+     // through would have rejected the initial unit. Delete once attributed.
+     {
+-      std::FILE* const sink = std::fopen("faf_diag.log", "a");
++      std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+       if (sink != nullptr) {
+         const bool ignoreCap = army->IgnoreUnitCap();
+         const float cap = army->GetUnitCap();
+@@ -552,7 +552,7 @@ namespace moho
+     // TEMPORARY PROBE -- is the Lua side actually receiving a unit? Delete once
+     // attributed.
+     {
+-      std::FILE* const sink = std::fopen("faf_diag.log", "a");
++      std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+       if (sink != nullptr) {
+         (void)std::fprintf(
+           sink, "[CDRSPAWN] created unit=%p luaObjState=%p pos=(%.1f,%.1f,%.1f) id=0x%08X\n",
+diff --git a/src/sdk/moho/sim/CWldSession.cpp b/src/sdk/moho/sim/CWldSession.cpp
+index ecf5ac25..6c249767 100644
+--- a/src/sdk/moho/sim/CWldSession.cpp
++++ b/src/sdk/moho/sim/CWldSession.cpp
+@@ -117,7 +117,7 @@ namespace
+   // drag-unload probes append here instead. The file lands beside the exe.
+   void UnloadDragDiagLine(const char* const fmt, ...)
+   {
+-    std::FILE* const sink = std::fopen("faf_diag.log", "a");
++    std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+     if (sink == nullptr) {
+       return;
+     }
+diff --git a/src/sdk/moho/sim/Sim.cpp b/src/sdk/moho/sim/Sim.cpp
+index d5f4c7c6..93a2a990 100644
+--- a/src/sdk/moho/sim/Sim.cpp
++++ b/src/sdk/moho/sim/Sim.cpp
+@@ -2735,7 +2735,7 @@ namespace
+   // probe below appends here instead. The file lands beside the executable.
+   void DiagLine(const char* const fmt, ...)
+   {
+-    std::FILE* const sink = std::fopen("faf_diag.log", "a");
++    std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+     if (sink == nullptr) {
+       return;
+     }
+diff --git a/src/sdk/moho/unit/core/UnitWeapon.cpp b/src/sdk/moho/unit/core/UnitWeapon.cpp
+index fe52cc9f..673b0951 100644
+--- a/src/sdk/moho/unit/core/UnitWeapon.cpp
++++ b/src/sdk/moho/unit/core/UnitWeapon.cpp
+@@ -384,7 +384,7 @@ namespace
+       return;
+     }
+ 
+-    std::FILE* const sink = std::fopen("faf_diag.log", "a");
++    std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+     if (sink == nullptr) {
+       return;
+     }
+diff --git a/src/sdk/moho/unit/tasks/CUnitLoadUnits.cpp b/src/sdk/moho/unit/tasks/CUnitLoadUnits.cpp
+index 3ec24317..e4c5eeaa 100644
+--- a/src/sdk/moho/unit/tasks/CUnitLoadUnits.cpp
++++ b/src/sdk/moho/unit/tasks/CUnitLoadUnits.cpp
+@@ -43,7 +43,7 @@ namespace
+   // probes below append here instead. The file lands beside the executable.
+   void DiagLine(const char* const fmt, ...)
+   {
+-    std::FILE* const sink = std::fopen("faf_diag.log", "a");
++    std::FILE* const sink = (gpg::LogDiagnosticsEnabled() ? std::fopen("faf_diag.log", "a") : nullptr);
+     if (sink == nullptr) {
+       return;
+     }
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,40 @@
+From 459ea56b2e259127001b463a600d7e119b09ad0c Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 15:12:40 +0200
+Subject: [PATCH 11/56] Skip the terrain pass for projectiles with
+ CollideSurface off
+
+Projectile::CheckCollision tests mCollideSurface at 0x0069D281 and, when it
+is clear, jumps to the homing-target branch at 0x0069D627, skipping the water
+and the terrain passes. The recovery ran the terrain intersection
+unconditionally, so CollideSurface = false effect projectiles hit the ground
+and were destroyed -- e.g. the UEF build-beam endpoint (UEFBuild01_proj),
+after which EffectUtilitiesUEF.lua raised "Game object has been destroyed"
+hundreds of times per game.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 6af3dd93da6526da289506e7aba0a6ed0486bb39)
+---
+ src/sdk/moho/projectile/Projectile.cpp | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/sdk/moho/projectile/Projectile.cpp b/src/sdk/moho/projectile/Projectile.cpp
+index b6653c73..c421a7b1 100644
+--- a/src/sdk/moho/projectile/Projectile.cpp
++++ b/src/sdk/moho/projectile/Projectile.cpp
+@@ -1446,7 +1446,11 @@ namespace moho
+     }
+ 
+     // --- Branch B: terrain-surface intersection ---
+-    {
++    // Surface-colliding projectiles only: when mCollideSurface is clear the binary jumps from the
++    // test at asm 0x0069D281 straight to the homing-target branch (0x0069D627), skipping both the
++    // water and the terrain passes. Ungated, CollideSurface = false effect projectiles (e.g. the UEF
++    // build-beam endpoint UEFBuild01_proj) struck the ground and were destroyed.
++    if (mCollideSurface) {
+       const GeomLine3 terrainLine{
+         Wm3::Vec3f(curPos.x, curPos.y, curPos.z),
+         Wm3::Vec3f(segment.Direction.x, segment.Direction.y, segment.Direction.z),
+-- 
+2.55.0.windows.3
+

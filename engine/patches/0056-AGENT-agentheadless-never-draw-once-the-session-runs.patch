@@ -1,0 +1,43 @@
+From 454a47812b8bb038269874c1067283cab6cd4a7f Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 21:23:26 +0200
+Subject: [PATCH 56/56] [AGENT] /agentheadless: never draw once the session
+ runs
+
+Training games on a Linux server run under Wine on a virtual display,
+where nothing minimizes their window; drawing every frame in software
+took three times the CPU of the simulation. With the switch the game
+takes the minimized path (no device Refresh, wait for the next sim
+beat) as soon as its session exists. Loading still draws: it needs
+frames, and there is no beat to wait for before the session.
+
+Measured on the server's agent VM: 6 games 2.6 -> 21 decisions/s.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/sdk/moho/app/CScApp.cpp | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/src/sdk/moho/app/CScApp.cpp b/src/sdk/moho/app/CScApp.cpp
+index aa64ee91..5d0c1f55 100644
+--- a/src/sdk/moho/app/CScApp.cpp
++++ b/src/sdk/moho/app/CScApp.cpp
+@@ -1061,8 +1061,13 @@ void CScApp::Main()
+     uiManager->UpdateFrameRate(frameSeconds);
+   }
+ 
+-  bool minimizedNow = false;
+-  if (moho::sMainWindow != nullptr) {
++  // [AGENT] /agentheadless: once its session runs, the game behaves as if minimized -- it never draws, and waits
++  // for the next sim beat instead. Training games on Windows get there by being minimized after they connect;
++  // under Wine on a server nothing minimizes them, and drawing every frame in software took three times the CPU
++  // of the simulation. Not before the session exists: loading needs frames (and has no beat to wait for).
++  static const bool headless = moho::CFG_GetArgOption("/agentheadless", 0, nullptr);
++  bool minimizedNow = headless && activeSession != nullptr;
++  if (!minimizedNow && moho::sMainWindow != nullptr) {
+     const HWND windowHandle = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(moho::sMainWindow->GetHandle()));
+     minimizedNow = windowHandle != nullptr && ::IsIconic(windowHandle) != FALSE;
+   }
+-- 
+2.55.0.windows.3
+

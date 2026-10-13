@@ -1,0 +1,2650 @@
+From fadafb1cd2afe2c9b506f7ef0c61e4085ebbd880 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 15:12:39 +0200
+Subject: [PATCH 02/56] Fold CScrLuaMetatableFactory specializations into the
+ primary template
+
+45 translation units declared their own explicit specialization of
+CScrLuaMetatableFactory<T> (class body in the .cpp, out-of-line sInstance /
+Instance / Create) while other translation units instantiated the primary
+template for the same T. That is an ODR violation; with Release inlining,
+callers ended up with two singletons per type, so Lua methods were registered
+on one metatable while objects were created with the other and scripts saw
+nil methods (Unit:SetBusy, GetWeaponCount, HideBone,
+GetAirUnitsEmphasis, ...).
+
+The primary template in CScrLuaObjectFactory.h already does the same thing
+(function-local static instance, SCR_CreateSimpleMetatable), so the
+specializations are removed and every translation unit shares one
+definition.
+
+(cherry picked from commit a7ed6b6499796c7f5c3824e89be67e2c981de6f2)
+
+Ported onto 8977bb9d: kept upstream's new CLuaConOutputHandler::GetPointerType/sPointerType beside the removed sInstance.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ src/sdk/moho/ai/CAiNavigatorImpl.cpp          |  16 +-
+ src/sdk/moho/ai/CAiNavigatorImpl.h            |  22 +-
+ src/sdk/moho/ai/CAiPersonality.cpp            |  12 +-
+ src/sdk/moho/ai/CAiPersonality.h              |  17 +-
+ src/sdk/moho/ai/CAimManipulator.cpp           |  18 +-
+ src/sdk/moho/ai/CAimManipulator.h             |  22 +-
+ .../moho/animation/CAnimationManipulator.cpp  |  16 +-
+ .../moho/animation/CAnimationManipulator.h    |  20 +-
+ src/sdk/moho/animation/CSlaveManipulator.cpp  |  17 +-
+ src/sdk/moho/animation/CSlaveManipulator.h    |  20 +-
+ src/sdk/moho/animation/CSlideManipulator.cpp  |  17 +-
+ src/sdk/moho/animation/CSlideManipulator.h    |  20 +-
+ src/sdk/moho/audio/HSound.cpp                 |  16 +-
+ src/sdk/moho/audio/HSound.h                   |  20 +-
+ .../moho/collision/CCollisionManipulator.cpp  |  17 +-
+ .../moho/collision/CCollisionManipulator.h    |  17 +-
+ src/sdk/moho/debug/CPathDebugger.cpp          |  12 +-
+ src/sdk/moho/debug/CPathDebugger.h            |  14 +-
+ .../CollisionBeamEntityLuaFunctionThunks.cpp  |  30 +-
+ src/sdk/moho/entity/MotorFallDown.cpp         |  12 +-
+ src/sdk/moho/entity/MotorFallDown.h           |  17 +-
+ src/sdk/moho/entity/MotorSinkAway.cpp         |  12 +-
+ src/sdk/moho/entity/MotorSinkAway.h           |  17 +-
+ src/sdk/moho/entity/Prop.cpp                  |  12 +-
+ src/sdk/moho/entity/Prop.h                    |  17 +-
+ src/sdk/moho/lua/CLuaConOutputHandler.cpp     |  17 +-
+ src/sdk/moho/lua/CLuaConOutputHandler.h       |  28 +-
+ src/sdk/moho/lua/CScrLuaObjectFactory.cpp     |  16 +-
+ src/sdk/moho/lua/CScrLuaObjectFactory.h       |  27 +-
+ src/sdk/moho/misc/CEconomyEvent.cpp           |  16 +-
+ src/sdk/moho/misc/CEconomyEvent.h             |  22 +-
+ src/sdk/moho/net/CLobby.cpp                   |  14 +-
+ src/sdk/moho/net/CLobby.h                     |  13 +-
+ src/sdk/moho/projectile/Projectile.h          |  17 +-
+ .../ProjectileStartupRegistrations.cpp        |  12 +-
+ src/sdk/moho/render/CDecalHandle.cpp          |  16 +-
+ src/sdk/moho/render/CDecalHandle.h            |  14 +-
+ src/sdk/moho/render/camera/CameraImpl.cpp     |  12 +-
+ src/sdk/moho/render/camera/CameraImpl.h       |  14 +-
+ src/sdk/moho/script/CUnitScriptTask.cpp       |  17 +-
+ src/sdk/moho/script/CUnitScriptTask.h         |  20 +-
+ src/sdk/moho/script/ScriptedDecal.cpp         |  31 +-
+ src/sdk/moho/serialization/CPrefetchSet.cpp   |  12 +-
+ src/sdk/moho/serialization/CPrefetchSet.h     |  16 +-
+ src/sdk/moho/sim/CDamage.h                    |  20 +-
+ .../sim/CDamageLuaFunctionRegistrations.cpp   |  16 +-
+ src/sdk/moho/sim/CPlatoon.cpp                 |  25 +-
+ .../moho/sim/ManipulatorLuaFunctionThunks.cpp | 180 ++-----
+ src/sdk/moho/ui/UiRuntimeTypes.cpp            | 448 +++---------------
+ src/sdk/moho/unit/core/Unit.cpp               |  31 +-
+ src/sdk/moho/unit/core/UserUnit.cpp           |  31 +-
+ 51 files changed, 215 insertions(+), 1300 deletions(-)
+
+diff --git a/src/sdk/moho/ai/CAiNavigatorImpl.cpp b/src/sdk/moho/ai/CAiNavigatorImpl.cpp
+index 2bdb0d9d..f39e253e 100644
+--- a/src/sdk/moho/ai/CAiNavigatorImpl.cpp
++++ b/src/sdk/moho/ai/CAiNavigatorImpl.cpp
+@@ -265,7 +265,7 @@ namespace
+ } // namespace
+ 
+ gpg::RType* CAiNavigatorImpl::sType = nullptr;
+-CScrLuaMetatableFactory<CAiNavigatorImpl> CScrLuaMetatableFactory<CAiNavigatorImpl>::sInstance{};
++// CScrLuaMetatableFactory<CAiNavigatorImpl> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x005A58E0 (FUN_005A58E0, cfunc_CAiNavigatorImplSetGoalL)
+@@ -1245,22 +1245,14 @@ namespace
+ /**
+  * Address: 0x1001FDE0 (MohoEngine.dll constructor shape)
+  */
+-CScrLuaMetatableFactory<CAiNavigatorImpl>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<CAiNavigatorImpl> is the primary template: one definition in every translation unit.
+ 
+-CScrLuaMetatableFactory<CAiNavigatorImpl>& CScrLuaMetatableFactory<CAiNavigatorImpl>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CAiNavigatorImpl> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x005A7310 (FUN_005A7310, ?Create@?$CScrLuaMetatableFactory@VCAiNavigatorImpl@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+  */
+-LuaPlus::LuaObject CScrLuaMetatableFactory<CAiNavigatorImpl>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CAiNavigatorImpl> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x005A3550 (FUN_005A3550, default ctor)
+diff --git a/src/sdk/moho/ai/CAiNavigatorImpl.h b/src/sdk/moho/ai/CAiNavigatorImpl.h
+index 86b9e0cb..e772a9f4 100644
+--- a/src/sdk/moho/ai/CAiNavigatorImpl.h
++++ b/src/sdk/moho/ai/CAiNavigatorImpl.h
+@@ -172,27 +172,7 @@ namespace moho
+    * VFTABLE: 0x00E1C0B8
+    * COL:  0x00E71714
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<CAiNavigatorImpl> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    /**
+-     * Address: 0x1001FDE0 (MohoEngine.dll constructor shape)
+-     */
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]]
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x005A7310 (FUN_005A7310, ?Create@?$CScrLuaMetatableFactory@VCAiNavigatorImpl@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CAiNavigatorImpl> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CAiNavigatorImpl>) == 0x08,
+diff --git a/src/sdk/moho/ai/CAiPersonality.cpp b/src/sdk/moho/ai/CAiPersonality.cpp
+index ae0af0da..ceacff1d 100644
+--- a/src/sdk/moho/ai/CAiPersonality.cpp
++++ b/src/sdk/moho/ai/CAiPersonality.cpp
+@@ -330,7 +330,7 @@ namespace
+ } // namespace
+ 
+ gpg::RType* CAiPersonality::sType = nullptr;
+-CScrLuaMetatableFactory<CAiPersonality> CScrLuaMetatableFactory<CAiPersonality>::sInstance{};
++// CScrLuaMetatableFactory<CAiPersonality> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x005BA9F0 (FUN_005BA9F0, cfunc_CAiPersonalityAdjustDelayL)
+@@ -1802,10 +1802,7 @@ int moho::register_CScrLuaMetatableFactory_CAiPersonality_Index()
+   return index;
+ }
+ 
+-CScrLuaMetatableFactory<CAiPersonality>& CScrLuaMetatableFactory<CAiPersonality>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CAiPersonality> is the primary template: one definition in every translation unit.
+ 
+ namespace
+ {
+@@ -1824,10 +1821,7 @@ namespace
+ /**
+  * Address: 0x005B9620 (FUN_005B9620, ?Create@?$CScrLuaMetatableFactory@VCAiPersonality@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+  */
+-LuaPlus::LuaObject CScrLuaMetatableFactory<CAiPersonality>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CAiPersonality> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x005B6B40 (FUN_005B6B40, default ctor body)
+diff --git a/src/sdk/moho/ai/CAiPersonality.h b/src/sdk/moho/ai/CAiPersonality.h
+index 047e8c8d..288dea36 100644
+--- a/src/sdk/moho/ai/CAiPersonality.h
++++ b/src/sdk/moho/ai/CAiPersonality.h
+@@ -174,22 +174,7 @@ namespace moho
+    * VFTABLE: 0x00E1CAB8
+    * COL:  0x00E7298C
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<CAiPersonality> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    [[nodiscard]]
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x005B9620 (FUN_005B9620, ?Create@?$CScrLuaMetatableFactory@VCAiPersonality@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CAiPersonality> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CAiPersonality>) == 0x08,
+diff --git a/src/sdk/moho/ai/CAimManipulator.cpp b/src/sdk/moho/ai/CAimManipulator.cpp
+index 64111b23..b8ee66a4 100644
+--- a/src/sdk/moho/ai/CAimManipulator.cpp
++++ b/src/sdk/moho/ai/CAimManipulator.cpp
+@@ -43,8 +43,7 @@ namespace moho
+ 
+ bool moho::dbg_Ballistics = false;
+ gpg::RType* moho::CAimManipulator::sType = nullptr;
+-moho::CScrLuaMetatableFactory<moho::CAimManipulator>
+-  moho::CScrLuaMetatableFactory<moho::CAimManipulator>::sInstance{};
++// CScrLuaMetatableFactory<CAimManipulator> is the primary template: one definition in every translation unit.
+ 
+ namespace
+ {
+@@ -1132,15 +1131,9 @@ Wm3::Vector3f* moho::CAimManipulator::Aim(Wm3::Vector3f* const outDirection, CAi
+   return outDirection;
+ }
+ 
+-moho::CScrLuaMetatableFactory<moho::CAimManipulator>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<CAimManipulator> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CAimManipulator>&
+-moho::CScrLuaMetatableFactory<moho::CAimManipulator>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CAimManipulator> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00632C40 (FUN_00632C40)
+@@ -1150,10 +1143,7 @@ moho::CScrLuaMetatableFactory<moho::CAimManipulator>::Instance()
+  * Creates the `CAimManipulator` Lua metatable through
+  * `SCR_CreateSimpleMetatable`.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CAimManipulator>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CAimManipulator> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00632140 (FUN_00632140, cfunc_CAimManipulatorSetFiringArc)
+diff --git a/src/sdk/moho/ai/CAimManipulator.h b/src/sdk/moho/ai/CAimManipulator.h
+index 146d7ad0..fc45975e 100644
+--- a/src/sdk/moho/ai/CAimManipulator.h
++++ b/src/sdk/moho/ai/CAimManipulator.h
+@@ -444,27 +444,7 @@ namespace moho
+     "CAimManipulator::mHeadingOffset offset must be 0x10C"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CAimManipulator> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00632C40 (FUN_00632C40)
+-     * Mangled: ?Create@?$CScrLuaMetatableFactory@VCAimManipulator@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z
+-     *
+-     * What it does:
+-     * Creates the `CAimManipulator` Lua metatable through
+-     * `SCR_CreateSimpleMetatable`.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CAimManipulator> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CAimManipulator>) == 0x08,
+diff --git a/src/sdk/moho/animation/CAnimationManipulator.cpp b/src/sdk/moho/animation/CAnimationManipulator.cpp
+index f25fc999..30a6caab 100644
+--- a/src/sdk/moho/animation/CAnimationManipulator.cpp
++++ b/src/sdk/moho/animation/CAnimationManipulator.cpp
+@@ -515,7 +515,7 @@ namespace moho
+   int cfunc_CAnimationManipulatorPlayAnimL(LuaPlus::LuaState* state);
+ 
+   gpg::RType* CAnimationManipulator::sType = nullptr;
+-  CScrLuaMetatableFactory<CAnimationManipulator> CScrLuaMetatableFactory<CAnimationManipulator>::sInstance{};
++  // CScrLuaMetatableFactory<CAnimationManipulator> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x10015880 (constructor shape)
+@@ -523,14 +523,9 @@ namespace moho
+    * What it does:
+    * Stores one metatable-factory index used by `CScrLuaObjectFactory::Get`.
+    */
+-  CScrLuaMetatableFactory<CAnimationManipulator>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-  {}
++  // CScrLuaMetatableFactory<CAnimationManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CAnimationManipulator>& CScrLuaMetatableFactory<CAnimationManipulator>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CAnimationManipulator> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00641E10 (FUN_00641E10, ?Create@?$CScrLuaMetatableFactory@VCAnimationManipulator@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+@@ -538,10 +533,7 @@ namespace moho
+    * What it does:
+    * Creates the default metatable used by `CAnimationManipulator` Lua userdata.
+    */
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CAnimationManipulator>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CAnimationManipulator> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x006404B0 (FUN_006404B0, cfunc_CreateAnimator)
+diff --git a/src/sdk/moho/animation/CAnimationManipulator.h b/src/sdk/moho/animation/CAnimationManipulator.h
+index 76f26607..a9007586 100644
+--- a/src/sdk/moho/animation/CAnimationManipulator.h
++++ b/src/sdk/moho/animation/CAnimationManipulator.h
+@@ -179,25 +179,7 @@ namespace moho
+    * VFTABLE: 0x00E21770
+    * COL: 0x00E7AD54
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<CAnimationManipulator> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00641E10 (FUN_00641E10, ?Create@?$CScrLuaMetatableFactory@VCAnimationManipulator@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+-     *
+-     * What it does:
+-     * Builds the metatable object used for `CAnimationManipulator` Lua userdata.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CAnimationManipulator> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CAnimationManipulator>) == 0x8,
+diff --git a/src/sdk/moho/animation/CSlaveManipulator.cpp b/src/sdk/moho/animation/CSlaveManipulator.cpp
+index 08e90a8a..140425c6 100644
+--- a/src/sdk/moho/animation/CSlaveManipulator.cpp
++++ b/src/sdk/moho/animation/CSlaveManipulator.cpp
+@@ -250,7 +250,7 @@ namespace
+ namespace moho
+ {
+   gpg::RType* CSlaveManipulator::sType = nullptr;
+-  CScrLuaMetatableFactory<CSlaveManipulator> CScrLuaMetatableFactory<CSlaveManipulator>::sInstance{};
++  // CScrLuaMetatableFactory<CSlaveManipulator> is the primary template: one definition in every translation unit.
+ } // namespace moho
+ 
+ /**
+@@ -259,15 +259,9 @@ namespace moho
+  * What it does:
+  * Stores one metatable-factory index used by `CScrLuaObjectFactory::Get`.
+  */
+-moho::CScrLuaMetatableFactory<moho::CSlaveManipulator>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<CSlaveManipulator> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CSlaveManipulator>&
+-moho::CScrLuaMetatableFactory<moho::CSlaveManipulator>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CSlaveManipulator> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00646610 (FUN_00646610, ?Create@?$CScrLuaMetatableFactory@VCSlaveManipulator@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+@@ -275,10 +269,7 @@ moho::CScrLuaMetatableFactory<moho::CSlaveManipulator>::Instance()
+  * What it does:
+  * Creates the default metatable used by `CSlaveManipulator` Lua userdata.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CSlaveManipulator>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CSlaveManipulator> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00645F80 (FUN_00645F80, ??0CSlaveManipulator@Moho@@QAE@XZ)
+diff --git a/src/sdk/moho/animation/CSlaveManipulator.h b/src/sdk/moho/animation/CSlaveManipulator.h
+index e52057af..d356252e 100644
+--- a/src/sdk/moho/animation/CSlaveManipulator.h
++++ b/src/sdk/moho/animation/CSlaveManipulator.h
+@@ -234,25 +234,7 @@ namespace moho
+    * VFTABLE: 0x00E22D10
+    * COL: 0x00E7AEF4
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<CSlaveManipulator> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00646610 (FUN_00646610, ?Create@?$CScrLuaMetatableFactory@VCSlaveManipulator@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+-     *
+-     * What it does:
+-     * Builds the metatable object used for `CSlaveManipulator` Lua userdata.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CSlaveManipulator> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CSlaveManipulator>) == 0x8,
+diff --git a/src/sdk/moho/animation/CSlideManipulator.cpp b/src/sdk/moho/animation/CSlideManipulator.cpp
+index 4f383218..f43ebfc6 100644
+--- a/src/sdk/moho/animation/CSlideManipulator.cpp
++++ b/src/sdk/moho/animation/CSlideManipulator.cpp
+@@ -393,7 +393,7 @@ namespace
+ namespace moho
+ {
+   gpg::RType* CSlideManipulator::sType = nullptr;
+-  CScrLuaMetatableFactory<CSlideManipulator> CScrLuaMetatableFactory<CSlideManipulator>::sInstance{};
++  // CScrLuaMetatableFactory<CSlideManipulator> is the primary template: one definition in every translation unit.
+ } // namespace moho
+ 
+ /**
+@@ -461,15 +461,9 @@ void moho::CSlideManipulator::MemberSerialize(gpg::WriteArchive* const archive)
+  * What it does:
+  * Stores one metatable-factory index used by `CScrLuaObjectFactory::Get`.
+  */
+-moho::CScrLuaMetatableFactory<moho::CSlideManipulator>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<CSlideManipulator> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CSlideManipulator>&
+-moho::CScrLuaMetatableFactory<moho::CSlideManipulator>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CSlideManipulator> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00648420 (FUN_00648420, ?Create@?$CScrLuaMetatableFactory@VCSlideManipulator@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+@@ -477,10 +471,7 @@ moho::CScrLuaMetatableFactory<moho::CSlideManipulator>::Instance()
+  * What it does:
+  * Creates the default metatable used by `CSlideManipulator` Lua userdata.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CSlideManipulator>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CSlideManipulator> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00647020 (FUN_00647020, ??0CSlideManipulator@Moho@@QAE@XZ)
+diff --git a/src/sdk/moho/animation/CSlideManipulator.h b/src/sdk/moho/animation/CSlideManipulator.h
+index 93980959..603acfa3 100644
+--- a/src/sdk/moho/animation/CSlideManipulator.h
++++ b/src/sdk/moho/animation/CSlideManipulator.h
+@@ -272,25 +272,7 @@ namespace moho
+    * VFTABLE: 0x00E21750
+    * COL: 0x00E7ADF4
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<CSlideManipulator> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00648420 (FUN_00648420, ?Create@?$CScrLuaMetatableFactory@VCSlideManipulator@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+-     *
+-     * What it does:
+-     * Builds the metatable object used for `CSlideManipulator` Lua userdata.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CSlideManipulator> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CSlideManipulator>) == 0x8,
+diff --git a/src/sdk/moho/audio/HSound.cpp b/src/sdk/moho/audio/HSound.cpp
+index 5d14bae9..95b8506a 100644
+--- a/src/sdk/moho/audio/HSound.cpp
++++ b/src/sdk/moho/audio/HSound.cpp
+@@ -12,7 +12,7 @@ namespace moho
+ {
+   gpg::RType* HSound::sType = nullptr;
+ 
+-  CScrLuaMetatableFactory<HSound> CScrLuaMetatableFactory<HSound>::sInstance{};
++  // CScrLuaMetatableFactory<HSound> is the primary template: one definition in every translation unit.
+ } // namespace moho
+ 
+ /**
+@@ -21,14 +21,9 @@ namespace moho
+  * What it does:
+  * Stores one metatable-factory index used by `CScrLuaObjectFactory::Get`.
+  */
+-moho::CScrLuaMetatableFactory<moho::HSound>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<HSound> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::HSound>& moho::CScrLuaMetatableFactory<moho::HSound>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<HSound> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x004E1F20 (FUN_004E1F20, Moho::CScrLuaMetatableFactory<Moho::HSound>::Create)
+@@ -36,10 +31,7 @@ moho::CScrLuaMetatableFactory<moho::HSound>& moho::CScrLuaMetatableFactory<moho:
+  * What it does:
+  * Builds one simple metatable table for `HSound` userdata lanes.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::HSound>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<HSound> is the primary template: one definition in every translation unit.
+ 
+ namespace moho
+ {
+diff --git a/src/sdk/moho/audio/HSound.h b/src/sdk/moho/audio/HSound.h
+index a58c97ed..0d1aa9a2 100644
+--- a/src/sdk/moho/audio/HSound.h
++++ b/src/sdk/moho/audio/HSound.h
+@@ -79,25 +79,7 @@ namespace moho
+    * VFTABLE: 0x00E0BAE8
+    * COL: 0x00E72A04
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<HSound> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x004E1F20 (FUN_004E1F20, Moho::CScrLuaMetatableFactory<Moho::HSound>::Create)
+-     *
+-     * What it does:
+-     * Builds the default metatable for `HSound` Lua userdata.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<HSound> is the primary template: one definition in every translation unit.
+ 
+   static_assert(sizeof(CScrLuaMetatableFactory<HSound>) == 0x8, "CScrLuaMetatableFactory<HSound> size must be 0x8");
+ 
+diff --git a/src/sdk/moho/collision/CCollisionManipulator.cpp b/src/sdk/moho/collision/CCollisionManipulator.cpp
+index 979fa0e0..c5c1f208 100644
+--- a/src/sdk/moho/collision/CCollisionManipulator.cpp
++++ b/src/sdk/moho/collision/CCollisionManipulator.cpp
+@@ -850,13 +850,7 @@ namespace moho
+    * What it does:
+    * Stores one factory-table slot index used by CScrLuaObjectFactory::Get.
+    */
+-  CScrLuaMetatableFactory<CCollisionManipulator>& CScrLuaMetatableFactory<CCollisionManipulator>::Instance()
+-  {
+-    static CScrLuaMetatableFactory<CCollisionManipulator> instance(
+-      CScrLuaObjectFactory::AllocateFactoryObjectIndex()
+-    );
+-    return instance;
+-  }
++  // CScrLuaMetatableFactory<CCollisionManipulator> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00638BF0 (FUN_00638BF0)
+@@ -877,17 +871,12 @@ namespace moho
+    * What it does:
+    * Stores one factory-table slot index used by CScrLuaObjectFactory::Get.
+    */
+-  CScrLuaMetatableFactory<CCollisionManipulator>::CScrLuaMetatableFactory(const std::int32_t factoryObjectIndex)
+-    : CScrLuaObjectFactory(factoryObjectIndex)
+-  {}
++  // CScrLuaMetatableFactory<CCollisionManipulator> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00638640 (FUN_00638640)
+    */
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CCollisionManipulator>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CCollisionManipulator> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x006379A0 (FUN_006379A0, scalar deleting destructor thunk)
+diff --git a/src/sdk/moho/collision/CCollisionManipulator.h b/src/sdk/moho/collision/CCollisionManipulator.h
+index fe6a3817..c4247d19 100644
+--- a/src/sdk/moho/collision/CCollisionManipulator.h
++++ b/src/sdk/moho/collision/CCollisionManipulator.h
+@@ -195,22 +195,7 @@ namespace moho
+    * VFTABLE: 0x00E219F8
+    * COL: 0x00E7B574
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<CCollisionManipulator> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-    explicit CScrLuaMetatableFactory(std::int32_t factoryObjectIndex);
+-
+-  protected:
+-    /**
+-     * Address: 0x00638640 (FUN_00638640)
+-     *
+-     * What it does:
+-     * Builds the metatable used for `CCollisionManipulator` Lua userdata.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-  };
++  // CScrLuaMetatableFactory<CCollisionManipulator> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * VFTABLE: 0x00E21A30
+diff --git a/src/sdk/moho/debug/CPathDebugger.cpp b/src/sdk/moho/debug/CPathDebugger.cpp
+index 1bd3ab2c..a0684da4 100644
+--- a/src/sdk/moho/debug/CPathDebugger.cpp
++++ b/src/sdk/moho/debug/CPathDebugger.cpp
+@@ -63,18 +63,12 @@ namespace
+ 
+ namespace moho
+ {
+-  CScrLuaMetatableFactory<CPathDebugger> CScrLuaMetatableFactory<CPathDebugger>::sInstance{};
++  // CScrLuaMetatableFactory<CPathDebugger> is the primary template: one definition in every translation unit.
+   gpg::RType* CPathDebugger::sType = nullptr;
+ 
+-  CScrLuaMetatableFactory<CPathDebugger>& CScrLuaMetatableFactory<CPathDebugger>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CPathDebugger> is the primary template: one definition in every translation unit.
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CPathDebugger>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CPathDebugger> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x007B6390 (FUN_007B6390, register_CScrLuaMetatableFactory_CPathDebugger_Index)
+diff --git a/src/sdk/moho/debug/CPathDebugger.h b/src/sdk/moho/debug/CPathDebugger.h
+index d50ba562..aa096c59 100644
+--- a/src/sdk/moho/debug/CPathDebugger.h
++++ b/src/sdk/moho/debug/CPathDebugger.h
+@@ -59,19 +59,7 @@ namespace moho
+     ~CPathDebugger() override;
+   };
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CPathDebugger> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    [[nodiscard]]
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CPathDebugger> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CPathDebugger>) == 0x08,
+diff --git a/src/sdk/moho/entity/CollisionBeamEntityLuaFunctionThunks.cpp b/src/sdk/moho/entity/CollisionBeamEntityLuaFunctionThunks.cpp
+index a1b488c4..edb2f994 100644
+--- a/src/sdk/moho/entity/CollisionBeamEntityLuaFunctionThunks.cpp
++++ b/src/sdk/moho/entity/CollisionBeamEntityLuaFunctionThunks.cpp
+@@ -41,40 +41,20 @@ namespace moho
+   int cfunc_CollisionBeamEntityGetLauncher(lua_State* luaContext);
+   int cfunc_CollisionBeamEntityGetLauncherL(LuaPlus::LuaState* state);
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CollisionBeamEntity> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CollisionBeamEntity> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CollisionBeamEntity>) == 0x08,
+     "CScrLuaMetatableFactory<CollisionBeamEntity> size must be 0x8"
+   );
+ 
+-  CScrLuaMetatableFactory<CollisionBeamEntity> CScrLuaMetatableFactory<CollisionBeamEntity>::sInstance{};
++  // CScrLuaMetatableFactory<CollisionBeamEntity> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CollisionBeamEntity>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-  {}
++  // CScrLuaMetatableFactory<CollisionBeamEntity> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CollisionBeamEntity>& CScrLuaMetatableFactory<CollisionBeamEntity>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CollisionBeamEntity> is the primary template: one definition in every translation unit.
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CollisionBeamEntity>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CollisionBeamEntity> is the primary template: one definition in every translation unit.
+ } // namespace moho
+ 
+ namespace
+diff --git a/src/sdk/moho/entity/MotorFallDown.cpp b/src/sdk/moho/entity/MotorFallDown.cpp
+index e0fba110..d7e17124 100644
+--- a/src/sdk/moho/entity/MotorFallDown.cpp
++++ b/src/sdk/moho/entity/MotorFallDown.cpp
+@@ -341,20 +341,14 @@ namespace
+ namespace moho
+ {
+   gpg::RType* MotorFallDown::sType = nullptr;
+-  CScrLuaMetatableFactory<MotorFallDown> CScrLuaMetatableFactory<MotorFallDown>::sInstance{};
++  // CScrLuaMetatableFactory<MotorFallDown> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<MotorFallDown>& CScrLuaMetatableFactory<MotorFallDown>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<MotorFallDown> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00695B90 (FUN_00695B90, Moho::CScrLuaMetatableFactory<Moho::MotorFallDown>::Create)
+    */
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<MotorFallDown>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<MotorFallDown> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00694CF0 (FUN_00694CF0, default ctor lane)
+diff --git a/src/sdk/moho/entity/MotorFallDown.h b/src/sdk/moho/entity/MotorFallDown.h
+index 46aebe21..0d06da28 100644
+--- a/src/sdk/moho/entity/MotorFallDown.h
++++ b/src/sdk/moho/entity/MotorFallDown.h
+@@ -82,22 +82,7 @@ namespace moho
+   static_assert(offsetof(MotorFallDown, mBreakOnWhack) == 0x44, "MotorFallDown::mBreakOnWhack offset must be 0x44");
+   static_assert(sizeof(MotorFallDown) == 0x48, "MotorFallDown size must be 0x48");
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<MotorFallDown> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    [[nodiscard]]
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00695B90 (FUN_00695B90, Moho::CScrLuaMetatableFactory<Moho::MotorFallDown>::Create)
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<MotorFallDown> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<MotorFallDown>) == 0x08,
+diff --git a/src/sdk/moho/entity/MotorSinkAway.cpp b/src/sdk/moho/entity/MotorSinkAway.cpp
+index e50e65ea..c894f13d 100644
+--- a/src/sdk/moho/entity/MotorSinkAway.cpp
++++ b/src/sdk/moho/entity/MotorSinkAway.cpp
+@@ -232,12 +232,9 @@ namespace
+ namespace moho
+ {
+   gpg::RType* MotorSinkAway::sType = nullptr;
+-  CScrLuaMetatableFactory<MotorSinkAway> CScrLuaMetatableFactory<MotorSinkAway>::sInstance{};
++  // CScrLuaMetatableFactory<MotorSinkAway> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<MotorSinkAway>& CScrLuaMetatableFactory<MotorSinkAway>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<MotorSinkAway> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x006971D0 (FUN_006971D0)
+@@ -256,10 +253,7 @@ namespace moho
+   /**
+    * Address: 0x00696FD0 (FUN_00696FD0, Moho::CScrLuaMetatableFactory<Moho::MotorSinkAway>::Create)
+    */
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<MotorSinkAway>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<MotorSinkAway> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00696500 (FUN_00696500, default ctor)
+diff --git a/src/sdk/moho/entity/MotorSinkAway.h b/src/sdk/moho/entity/MotorSinkAway.h
+index 4caa5132..0224d754 100644
+--- a/src/sdk/moho/entity/MotorSinkAway.h
++++ b/src/sdk/moho/entity/MotorSinkAway.h
+@@ -86,22 +86,7 @@ namespace moho
+   static_assert(offsetof(MotorSinkAway, mSinkDeltaY) == 0x38, "MotorSinkAway::mSinkDeltaY offset must be 0x38");
+   static_assert(sizeof(MotorSinkAway) == 0x3C, "MotorSinkAway size must be 0x3C");
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<MotorSinkAway> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    [[nodiscard]]
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00696FD0 (FUN_00696FD0, Moho::CScrLuaMetatableFactory<Moho::MotorSinkAway>::Create)
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<MotorSinkAway> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<MotorSinkAway>) == 0x08,
+diff --git a/src/sdk/moho/entity/Prop.cpp b/src/sdk/moho/entity/Prop.cpp
+index bfddc9a0..7986fa66 100644
+--- a/src/sdk/moho/entity/Prop.cpp
++++ b/src/sdk/moho/entity/Prop.cpp
+@@ -101,7 +101,7 @@ namespace moho
+ {
+   gpg::RType* SPropPriorityInfo::sType = nullptr;
+   gpg::RType* Prop::sType = nullptr;
+-  CScrLuaMetatableFactory<Prop> CScrLuaMetatableFactory<Prop>::sInstance{};
++  // CScrLuaMetatableFactory<Prop> is the primary template: one definition in every translation unit.
+   int cfunc_PropAddBoundedProp(lua_State* luaContext);
+   int cfunc_PropAddBoundedPropL(LuaPlus::LuaState* state);
+   int cfunc_SplitProp(lua_State* luaContext);
+@@ -112,18 +112,12 @@ namespace moho
+   int cfunc_CreatePropHPR(lua_State* luaContext);
+   int cfunc_CreatePropHPRL(LuaPlus::LuaState* state);
+ 
+-  CScrLuaMetatableFactory<Prop>& CScrLuaMetatableFactory<Prop>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<Prop> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00680010 (FUN_00680010, Moho::CScrLuaMetatableFactory<Moho::Prop>::Create)
+    */
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<Prop>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<Prop> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x0067F140 (FUN_0067F140, func_GetPropFactory)
+diff --git a/src/sdk/moho/entity/Prop.h b/src/sdk/moho/entity/Prop.h
+index b762e014..b5efc28b 100644
+--- a/src/sdk/moho/entity/Prop.h
++++ b/src/sdk/moho/entity/Prop.h
+@@ -180,22 +180,7 @@ namespace moho
+   static_assert(offsetof(Prop, mHandleIndex) == 0x284, "Prop::mHandleIndex offset must be 0x284");
+   static_assert(sizeof(Prop) == 0x288, "Prop size must be 0x288");
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<Prop> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    [[nodiscard]]
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00680010 (FUN_00680010, Moho::CScrLuaMetatableFactory<Moho::Prop>::Create)
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<Prop> is the primary template: one definition in every translation unit.
+ 
+   static_assert(sizeof(CScrLuaMetatableFactory<Prop>) == 0x08, "CScrLuaMetatableFactory<Prop> size must be 0x08");
+ 
+diff --git a/src/sdk/moho/lua/CLuaConOutputHandler.cpp b/src/sdk/moho/lua/CLuaConOutputHandler.cpp
+index d2afc24d..cf22b7ea 100644
+--- a/src/sdk/moho/lua/CLuaConOutputHandler.cpp
++++ b/src/sdk/moho/lua/CLuaConOutputHandler.cpp
+@@ -172,7 +172,7 @@ namespace moho
+     }
+     return sPointerType;
+   }
+-  CScrLuaMetatableFactory<CLuaConOutputHandler*> CScrLuaMetatableFactory<CLuaConOutputHandler*>::sInstance{};
++  // CScrLuaMetatableFactory<CLuaConOutputHandler*> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00BC3B10 (FUN_00BC3B10, register_CScrLuaMetatableFactory_CLuaConOutputHandler)
+@@ -273,23 +273,14 @@ void moho::CLuaConOutputHandler::Handle(const char* const text)
+ /**
+   * Alias of FUN_1001FDE0 (non-canonical helper lane).
+  */
+-moho::CScrLuaMetatableFactory<moho::CLuaConOutputHandler*>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<CLuaConOutputHandler*> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CLuaConOutputHandler*>&
+-moho::CScrLuaMetatableFactory<moho::CLuaConOutputHandler*>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CLuaConOutputHandler*> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00420DA0 (FUN_00420DA0)
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CLuaConOutputHandler*>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CLuaConOutputHandler*> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x0041EA50 (FUN_0041EA50, scalar deleting destructor thunk)
+diff --git a/src/sdk/moho/lua/CLuaConOutputHandler.h b/src/sdk/moho/lua/CLuaConOutputHandler.h
+index 597046f6..15fd012b 100644
+--- a/src/sdk/moho/lua/CLuaConOutputHandler.h
++++ b/src/sdk/moho/lua/CLuaConOutputHandler.h
+@@ -90,33 +90,7 @@ namespace moho
+    * VFTABLE: 0x00E017B8
+    * COL:     0x00E5DD98
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<CLuaConOutputHandler*> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    /**
+-     * Address: 0x1001FDE0 (FUN_1001FDE0, MohoEngine.dll)
+-     *
+-     * What it does:
+-     * Initializes object-factory metadata for CLuaConOutputHandler userdata.
+-     */
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]]
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00420DA0 (FUN_00420DA0)
+-     *
+-     * What it does:
+-     * Builds a simple metatable (`__index = self`) for handler userdata.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CLuaConOutputHandler*> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * VFTABLE: 0x00E01750
+diff --git a/src/sdk/moho/lua/CScrLuaObjectFactory.cpp b/src/sdk/moho/lua/CScrLuaObjectFactory.cpp
+index cec8c703..e33cea57 100644
+--- a/src/sdk/moho/lua/CScrLuaObjectFactory.cpp
++++ b/src/sdk/moho/lua/CScrLuaObjectFactory.cpp
+@@ -418,7 +418,7 @@ namespace
+ namespace moho
+ {
+   int32_t CScrLuaObjectFactory::sNumIds = 0;
+-  CScrLuaMetatableFactory<CScriptObject*> CScrLuaMetatableFactory<CScriptObject*>::sInstance{};
++  // CScrLuaMetatableFactory<CScriptObject*> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00BC60D0 (FUN_00BC60D0)
+@@ -1380,24 +1380,16 @@ namespace moho
+     return value;
+   }
+ 
+-  CScrLuaMetatableFactory<CScriptObject*>& CScrLuaMetatableFactory<CScriptObject*>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CScriptObject*> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x100BA690
+    * (?Create@?$CScrLuaMetatableFactory@PAVCScriptObject@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+    */
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CScriptObject*>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CScriptObject*> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x100BA630 (FUN_100BA630, ??0?$CScrLuaMetatableFactory@PAVCScriptObject@Moho@@@Moho@@QAE@XZ)
+    */
+-  CScrLuaMetatableFactory<CScriptObject*>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory()
+-  {}
++  // CScrLuaMetatableFactory<CScriptObject*> is the primary template: one definition in every translation unit.
+ } // namespace moho
+diff --git a/src/sdk/moho/lua/CScrLuaObjectFactory.h b/src/sdk/moho/lua/CScrLuaObjectFactory.h
+index 62cefacb..f4709785 100644
+--- a/src/sdk/moho/lua/CScrLuaObjectFactory.h
++++ b/src/sdk/moho/lua/CScrLuaObjectFactory.h
+@@ -341,32 +341,7 @@ namespace moho
+     CScrLuaMetatableFactory() = default;
+   };
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CScriptObject*> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    /**
+-     * Returns the process-global metatable factory instance.
+-     */
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x100BA690
+-     * (?Create@?$CScrLuaMetatableFactory@PAVCScriptObject@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    /**
+-     * Address: 0x100BA630 (FUN_100BA630, ??0?$CScrLuaMetatableFactory@PAVCScriptObject@Moho@@@Moho@@QAE@XZ)
+-     *
+-     * What it does:
+-     * Constructs the CScriptObject metatable factory and assigns its cache index.
+-     */
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CScriptObject*> is the primary template: one definition in every translation unit.
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CScriptObject*>) == 0x8, "CScrLuaMetatableFactory<CScriptObject*> must be 0x8"
+   );
+diff --git a/src/sdk/moho/misc/CEconomyEvent.cpp b/src/sdk/moho/misc/CEconomyEvent.cpp
+index 0abaf939..e7eb59c2 100644
+--- a/src/sdk/moho/misc/CEconomyEvent.cpp
++++ b/src/sdk/moho/misc/CEconomyEvent.cpp
+@@ -886,7 +886,7 @@ namespace moho
+   gpg::RType* CEconRequest::sType = nullptr;
+   gpg::RType* CEconomyEvent::sType = nullptr;
+   gpg::RType* CEconomyEvent::sPointerType = nullptr;
+-  CScrLuaMetatableFactory<CEconomyEvent> CScrLuaMetatableFactory<CEconomyEvent>::sInstance{};
++  // CScrLuaMetatableFactory<CEconomyEvent> is the primary template: one definition in every translation unit.
+ 
+   namespace
+   {
+@@ -1222,22 +1222,14 @@ bool moho::CEconomyEvent::IsDone() const noexcept
+ /**
+   * Alias of FUN_1001FDE0 (non-canonical helper lane).
+  */
+-moho::CScrLuaMetatableFactory<moho::CEconomyEvent>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<CEconomyEvent> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CEconomyEvent>& moho::CScrLuaMetatableFactory<moho::CEconomyEvent>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CEconomyEvent> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00775B80 (FUN_00775B80)
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CEconomyEvent>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CEconomyEvent> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00BDD360 (FUN_00BDD360, dynamic initializer for the global
+diff --git a/src/sdk/moho/misc/CEconomyEvent.h b/src/sdk/moho/misc/CEconomyEvent.h
+index 09409598..b05728ed 100644
+--- a/src/sdk/moho/misc/CEconomyEvent.h
++++ b/src/sdk/moho/misc/CEconomyEvent.h
+@@ -201,27 +201,7 @@ namespace moho
+    * VFTABLE: 0x00E36FD4
+    * COL:  0x00E90B08
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<CEconomyEvent> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    /**
+-     * Address: 0x1001FDE0 (MohoEngine.dll constructor shape)
+-     */
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]]
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00775B80 (FUN_00775B80)
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CEconomyEvent> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * VFTABLE: 0x00E36FE4
+diff --git a/src/sdk/moho/net/CLobby.cpp b/src/sdk/moho/net/CLobby.cpp
+index 9c00c228..49a23ce0 100644
+--- a/src/sdk/moho/net/CLobby.cpp
++++ b/src/sdk/moho/net/CLobby.cpp
+@@ -453,19 +453,11 @@ namespace
+ 
+ namespace moho
+ {
+-  CScrLuaMetatableFactory<CLobby> CScrLuaMetatableFactory<CLobby>::sInstance{};
++  // CScrLuaMetatableFactory<CLobby> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CLobby>& CScrLuaMetatableFactory<CLobby>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CLobby> is the primary template: one definition in every translation unit.
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CLobby>::Create(
+-    LuaPlus::LuaState* const state
+-  )
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CLobby> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00BDFFB0 (FUN_00BDFFB0, register_CScrLuaMetatableFactory_CLobby)
+diff --git a/src/sdk/moho/net/CLobby.h b/src/sdk/moho/net/CLobby.h
+index de1e5adf..621e7739 100644
+--- a/src/sdk/moho/net/CLobby.h
++++ b/src/sdk/moho/net/CLobby.h
+@@ -369,18 +369,7 @@ namespace moho
+   static_assert(offsetof(CLobby, mSocket) == 0xC0, "mSocket offset");
+   static_assert(offsetof(CLobby, hostedTime) == 0xC4, "hostedTime offset");
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CLobby> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CLobby> is the primary template: one definition in every translation unit.
+ 
+   static_assert(sizeof(CScrLuaMetatableFactory<CLobby>) == 0x08, "CScrLuaMetatableFactory<CLobby> size must be 0x08");
+ 
+diff --git a/src/sdk/moho/projectile/Projectile.h b/src/sdk/moho/projectile/Projectile.h
+index 414e32a7..7d8ba368 100644
+--- a/src/sdk/moho/projectile/Projectile.h
++++ b/src/sdk/moho/projectile/Projectile.h
+@@ -330,22 +330,7 @@ namespace moho
+     bool isChildProjectile
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<Projectile> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    [[nodiscard]]
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x0067FFE0 (FUN_0067FFE0, Moho::CScrLuaMetatableFactory<Moho::Projectile>::Create)
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<Projectile> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<Projectile>) == 0x08,
+diff --git a/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp b/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
+index 9b83b29f..1005b5ce 100644
+--- a/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
++++ b/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
+@@ -50,7 +50,7 @@ namespace moho
+   // has it; this file only registers them
+   // (register_ManyToOne{Broadcaster,Listener}_EProjectileImpactEvent_TypeInfo,
+   // 0x00BD64C0 and 0x00BD64E0).
+-  CScrLuaMetatableFactory<Projectile> CScrLuaMetatableFactory<Projectile>::sInstance{};
++  // CScrLuaMetatableFactory<Projectile> is the primary template: one definition in every translation unit.
+ } // namespace moho
+ 
+ namespace
+@@ -602,15 +602,9 @@ namespace moho
+   /**
+    * Address: 0x0067FFE0 (FUN_0067FFE0, Moho::CScrLuaMetatableFactory<Moho::Projectile>::Create)
+    */
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<Projectile>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<Projectile> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<Projectile>& CScrLuaMetatableFactory<Projectile>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<Projectile> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x0067F0E0 (FUN_0067F0E0, func_GetProjectileFactory)
+diff --git a/src/sdk/moho/render/CDecalHandle.cpp b/src/sdk/moho/render/CDecalHandle.cpp
+index af062ee3..72afb5d1 100644
+--- a/src/sdk/moho/render/CDecalHandle.cpp
++++ b/src/sdk/moho/render/CDecalHandle.cpp
+@@ -83,21 +83,13 @@ namespace moho
+ 
+   gpg::RType* CDecalHandle::sType = nullptr;
+   gpg::RType* CDecalHandle::sPointerType = nullptr;
+-  CScrLuaMetatableFactory<CDecalHandle> CScrLuaMetatableFactory<CDecalHandle>::sInstance{};
++  // CScrLuaMetatableFactory<CDecalHandle> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CDecalHandle>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-  {}
++  // CScrLuaMetatableFactory<CDecalHandle> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CDecalHandle>& CScrLuaMetatableFactory<CDecalHandle>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CDecalHandle> is the primary template: one definition in every translation unit.
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CDecalHandle>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CDecalHandle> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x007788B0 (FUN_007788B0, Moho::CDecalHandle::GetClass)
+diff --git a/src/sdk/moho/render/CDecalHandle.h b/src/sdk/moho/render/CDecalHandle.h
+index 44cabd91..cd025194 100644
+--- a/src/sdk/moho/render/CDecalHandle.h
++++ b/src/sdk/moho/render/CDecalHandle.h
+@@ -150,19 +150,7 @@ namespace moho
+     std::uint32_t mCreatedAtTick;         // +0xD4
+   };
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CDecalHandle> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CDecalHandle> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CDecalHandle>) == 0x08,
+diff --git a/src/sdk/moho/render/camera/CameraImpl.cpp b/src/sdk/moho/render/camera/CameraImpl.cpp
+index ccde15d0..8fab9d27 100644
+--- a/src/sdk/moho/render/camera/CameraImpl.cpp
++++ b/src/sdk/moho/render/camera/CameraImpl.cpp
+@@ -519,17 +519,11 @@ namespace
+ 
+ namespace moho
+ {
+-  CScrLuaMetatableFactory<CameraImpl> CScrLuaMetatableFactory<CameraImpl>::sInstance{};
++  // CScrLuaMetatableFactory<CameraImpl> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CameraImpl>& CScrLuaMetatableFactory<CameraImpl>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CameraImpl> is the primary template: one definition in every translation unit.
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CameraImpl>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CameraImpl> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x007B0A90 (FUN_007B0A90, func_CreateLuaCameraImpl)
+diff --git a/src/sdk/moho/render/camera/CameraImpl.h b/src/sdk/moho/render/camera/CameraImpl.h
+index 7e7a6fba..6e06173b 100644
+--- a/src/sdk/moho/render/camera/CameraImpl.h
++++ b/src/sdk/moho/render/camera/CameraImpl.h
+@@ -1210,19 +1210,7 @@ namespace moho
+   static_assert(offsetof(CameraImpl, mMaxZoomMult) == 0x850, "CameraImpl::mMaxZoomMult offset must be 0x850");
+   static_assert(sizeof(CameraImpl) == 0x858, "CameraImpl size must be 0x858");
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CameraImpl> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    [[nodiscard]]
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CameraImpl> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CameraImpl>) == 0x08,
+diff --git a/src/sdk/moho/script/CUnitScriptTask.cpp b/src/sdk/moho/script/CUnitScriptTask.cpp
+index 6ab4cc52..8a9ab964 100644
+--- a/src/sdk/moho/script/CUnitScriptTask.cpp
++++ b/src/sdk/moho/script/CUnitScriptTask.cpp
+@@ -261,7 +261,7 @@ namespace
+ } // namespace
+ 
+ gpg::RType* CUnitScriptTask::sType = nullptr;
+-CScrLuaMetatableFactory<CUnitScriptTask> CScrLuaMetatableFactory<CUnitScriptTask>::sInstance{};
++// CScrLuaMetatableFactory<CUnitScriptTask> is the primary template: one definition in every translation unit.
+ 
+ /**
+   * Alias of FUN_10015880 (non-canonical helper lane).
+@@ -269,15 +269,9 @@ CScrLuaMetatableFactory<CUnitScriptTask> CScrLuaMetatableFactory<CUnitScriptTask
+  * What it does:
+  * Stores one metatable-factory index used by `CScrLuaObjectFactory::Get`.
+  */
+-moho::CScrLuaMetatableFactory<moho::CUnitScriptTask>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<CUnitScriptTask> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CUnitScriptTask>&
+-moho::CScrLuaMetatableFactory<moho::CUnitScriptTask>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CUnitScriptTask> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x006240F0 (FUN_006240F0)
+@@ -300,10 +294,7 @@ moho::startup_CScrLuaMetatableFactory_CUnitScriptTask_Index()
+  * What it does:
+  * Creates the default metatable used by `CUnitScriptTask` Lua userdata.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CUnitScriptTask>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CUnitScriptTask> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00622810 (FUN_00622810, default ctor)
+diff --git a/src/sdk/moho/script/CUnitScriptTask.h b/src/sdk/moho/script/CUnitScriptTask.h
+index ac7548f0..cb63f798 100644
+--- a/src/sdk/moho/script/CUnitScriptTask.h
++++ b/src/sdk/moho/script/CUnitScriptTask.h
+@@ -132,25 +132,7 @@ namespace moho
+    * VFTABLE: 0x00E20C00
+    * COL: 0x00E7A0D0
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<CUnitScriptTask> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00623B50 (FUN_00623B50, ?Create@?$CScrLuaMetatableFactory@VCUnitScriptTask@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+-     *
+-     * What it does:
+-     * Builds the metatable object used for `CUnitScriptTask` Lua userdata.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CUnitScriptTask> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CUnitScriptTask>) == 0x8,
+diff --git a/src/sdk/moho/script/ScriptedDecal.cpp b/src/sdk/moho/script/ScriptedDecal.cpp
+index 498b4195..6669d474 100644
+--- a/src/sdk/moho/script/ScriptedDecal.cpp
++++ b/src/sdk/moho/script/ScriptedDecal.cpp
+@@ -29,20 +29,7 @@ using namespace moho;
+ 
+ namespace moho
+ {
+-  template <>
+-  class CScrLuaMetatableFactory<ScriptedDecal> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<ScriptedDecal> is the primary template: one definition in every translation unit.
+ 
+   static_assert(sizeof(CScrLuaMetatableFactory<ScriptedDecal>) == 0x08, "CScrLuaMetatableFactory<ScriptedDecal> size must be 0x08");
+ } // namespace moho
+@@ -116,21 +103,13 @@ namespace
+ 
+ } // namespace
+ 
+-CScrLuaMetatableFactory<ScriptedDecal> CScrLuaMetatableFactory<ScriptedDecal>::sInstance{};
++// CScrLuaMetatableFactory<ScriptedDecal> is the primary template: one definition in every translation unit.
+ 
+-CScrLuaMetatableFactory<ScriptedDecal>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<ScriptedDecal> is the primary template: one definition in every translation unit.
+ 
+-CScrLuaMetatableFactory<ScriptedDecal>& CScrLuaMetatableFactory<ScriptedDecal>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<ScriptedDecal> is the primary template: one definition in every translation unit.
+ 
+-LuaPlus::LuaObject CScrLuaMetatableFactory<ScriptedDecal>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<ScriptedDecal> is the primary template: one definition in every translation unit.
+ 
+ gpg::RType* ScriptedDecal::sType = nullptr;
+ 
+diff --git a/src/sdk/moho/serialization/CPrefetchSet.cpp b/src/sdk/moho/serialization/CPrefetchSet.cpp
+index 481d3514..e58e3347 100644
+--- a/src/sdk/moho/serialization/CPrefetchSet.cpp
++++ b/src/sdk/moho/serialization/CPrefetchSet.cpp
+@@ -114,7 +114,7 @@ namespace
+ namespace moho
+ {
+   gpg::RType* CPrefetchSet::sType = nullptr;
+-  CScrLuaMetatableFactory<CPrefetchSet> CScrLuaMetatableFactory<CPrefetchSet>::sInstance{};
++  // CScrLuaMetatableFactory<CPrefetchSet> is the primary template: one definition in every translation unit.
+ 
+   gpg::RType* CPrefetchSet::StaticGetClass()
+   {
+@@ -174,18 +174,12 @@ namespace moho
+     mHandles.clear();
+   }
+ 
+-  CScrLuaMetatableFactory<CPrefetchSet>& CScrLuaMetatableFactory<CPrefetchSet>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CPrefetchSet> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x004A5FC0 (FUN_004A5FC0, Moho::CScrLuaMetatableFactory<Moho::CPrefetchSet>::Create)
+    */
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CPrefetchSet>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CPrefetchSet> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x004A7D20 (FUN_004A7D20, func_CreatePrefetchSet)
+diff --git a/src/sdk/moho/serialization/CPrefetchSet.h b/src/sdk/moho/serialization/CPrefetchSet.h
+index a64a2230..901c79a4 100644
+--- a/src/sdk/moho/serialization/CPrefetchSet.h
++++ b/src/sdk/moho/serialization/CPrefetchSet.h
+@@ -42,21 +42,7 @@ namespace moho
+   static_assert(offsetof(CPrefetchSet, mHandles) == 0x00, "CPrefetchSet::mHandles offset must be 0x00");
+   static_assert(sizeof(CPrefetchSet) == 0x10, "CPrefetchSet size must be 0x10");
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CPrefetchSet> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x004A5FC0 (FUN_004A5FC0, Moho::CScrLuaMetatableFactory<Moho::CPrefetchSet>::Create)
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CPrefetchSet> is the primary template: one definition in every translation unit.
+ 
+   static_assert(sizeof(CScrLuaMetatableFactory<CPrefetchSet>) == 0x08, "CScrLuaMetatableFactory<CPrefetchSet> size must be 0x08");
+ 
+diff --git a/src/sdk/moho/sim/CDamage.h b/src/sdk/moho/sim/CDamage.h
+index 08c47455..f11963e9 100644
+--- a/src/sdk/moho/sim/CDamage.h
++++ b/src/sdk/moho/sim/CDamage.h
+@@ -237,25 +237,7 @@ namespace moho
+    * VFTABLE: 0x00E130BC
+    * COL: 0x00E743C0
+    */
+-  template <>
+-  class CScrLuaMetatableFactory<CDamage> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00739CF0 (FUN_00739CF0, Moho::CScrLuaMetatableFactory<Moho::CDamage>::Create)
+-     *
+-     * What it does:
+-     * Builds the metatable object used for `CDamage` Lua userdata.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CDamage> is the primary template: one definition in every translation unit.
+ 
+   static_assert(sizeof(CScrLuaMetatableFactory<CDamage>) == 0x8, "CScrLuaMetatableFactory<CDamage> size must be 0x8");
+ 
+diff --git a/src/sdk/moho/sim/CDamageLuaFunctionRegistrations.cpp b/src/sdk/moho/sim/CDamageLuaFunctionRegistrations.cpp
+index ce1752b5..fc18fc14 100644
+--- a/src/sdk/moho/sim/CDamageLuaFunctionRegistrations.cpp
++++ b/src/sdk/moho/sim/CDamageLuaFunctionRegistrations.cpp
+@@ -68,7 +68,7 @@ namespace
+ 
+ namespace moho
+ {
+-  CScrLuaMetatableFactory<CDamage> CScrLuaMetatableFactory<CDamage>::sInstance{};
++  // CScrLuaMetatableFactory<CDamage> is the primary template: one definition in every translation unit.
+ 
+   /**
+     * Alias of FUN_10015880 (non-canonical helper lane).
+@@ -76,14 +76,9 @@ namespace moho
+    * What it does:
+    * Stores one metatable-factory index used by `CScrLuaObjectFactory::Get`.
+    */
+-  CScrLuaMetatableFactory<CDamage>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-  {}
++  // CScrLuaMetatableFactory<CDamage> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CDamage>& CScrLuaMetatableFactory<CDamage>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CDamage> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x0073AA90 (FUN_0073AA90)
+@@ -105,10 +100,7 @@ namespace moho
+    * What it does:
+    * Creates the default metatable used by `CDamage` Lua userdata.
+    */
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CDamage>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CDamage> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x0073A810 (FUN_0073A810, func_CreateLuaCDamage)
+diff --git a/src/sdk/moho/sim/CPlatoon.cpp b/src/sdk/moho/sim/CPlatoon.cpp
+index 17d2f46d..45de31bb 100644
+--- a/src/sdk/moho/sim/CPlatoon.cpp
++++ b/src/sdk/moho/sim/CPlatoon.cpp
+@@ -61,18 +61,7 @@
+ 
+ namespace moho
+ {
+-  template <>
+-  class CScrLuaMetatableFactory<CPlatoon> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CPlatoon> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CPlatoon>) == 0x08, "CScrLuaMetatableFactory<CPlatoon> size must be 0x08"
+@@ -892,7 +881,7 @@ namespace
+ 
+ namespace moho
+ {
+-  CScrLuaMetatableFactory<CPlatoon> CScrLuaMetatableFactory<CPlatoon>::sInstance{};
++  // CScrLuaMetatableFactory<CPlatoon> is the primary template: one definition in every translation unit.
+ 
+   int cfunc_CPlatoonGetPersonality(lua_State* luaContext);
+   int cfunc_CPlatoonGetBrain(lua_State* luaContext);
+@@ -957,10 +946,7 @@ namespace moho
+   int cfunc_CPlatoonPlatoonCategoryCountAroundPositionL(LuaPlus::LuaState* state);
+   int cfunc_CPlatoonPlatoonCategoryCountL(LuaPlus::LuaState* state);
+ 
+-  CScrLuaMetatableFactory<CPlatoon>& CScrLuaMetatableFactory<CPlatoon>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CPlatoon> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x0072AC30 (FUN_0072AC30)
+@@ -1035,10 +1021,7 @@ namespace moho
+     return &instance;
+   }
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CPlatoon>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CPlatoon> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00723AC0 (FUN_00723AC0, Moho::CPlatoon::GetClass)
+diff --git a/src/sdk/moho/sim/ManipulatorLuaFunctionThunks.cpp b/src/sdk/moho/sim/ManipulatorLuaFunctionThunks.cpp
+index 53f107c4..e757f0ae 100644
+--- a/src/sdk/moho/sim/ManipulatorLuaFunctionThunks.cpp
++++ b/src/sdk/moho/sim/ManipulatorLuaFunctionThunks.cpp
+@@ -72,89 +72,17 @@ namespace moho
+   int cfunc_CThrustManipulatorSetThrustingParam(lua_State* luaContext);
+   int cfunc_CThrustManipulatorSetThrustingParamL(LuaPlus::LuaState* state);
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CBoneEntityManipulator> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
+-
+-  template <>
+-  class CScrLuaMetatableFactory<CBuilderArmManipulator> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
+-
+-  template <>
+-  class CScrLuaMetatableFactory<CFootPlantManipulator> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
++  // CScrLuaMetatableFactory<CBoneEntityManipulator> is the primary template: one definition in every translation unit.
+ 
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
+-
+-  template <>
+-  class CScrLuaMetatableFactory<Entity> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CBuilderArmManipulator> is the primary template: one definition in every translation unit.
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CRotateManipulator> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CFootPlantManipulator> is the primary template: one definition in every translation unit.
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CThrustManipulator> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    static CScrLuaMetatableFactory& Instance();
++  // CScrLuaMetatableFactory<Entity> is the primary template: one definition in every translation unit.
+ 
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
++  // CScrLuaMetatableFactory<CRotateManipulator> is the primary template: one definition in every translation unit.
+ 
+-  private:
+-    CScrLuaMetatableFactory();
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CThrustManipulator> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CBoneEntityManipulator>) == 0x08,
+@@ -178,21 +106,16 @@ namespace moho
+     "CScrLuaMetatableFactory<CThrustManipulator> size must be 0x8"
+   );
+ 
+-  CScrLuaMetatableFactory<CBoneEntityManipulator> CScrLuaMetatableFactory<CBoneEntityManipulator>::sInstance{};
+-  CScrLuaMetatableFactory<CBuilderArmManipulator> CScrLuaMetatableFactory<CBuilderArmManipulator>::sInstance{};
+-  CScrLuaMetatableFactory<CFootPlantManipulator> CScrLuaMetatableFactory<CFootPlantManipulator>::sInstance{};
+-  CScrLuaMetatableFactory<Entity> CScrLuaMetatableFactory<Entity>::sInstance{};
+-  CScrLuaMetatableFactory<CRotateManipulator> CScrLuaMetatableFactory<CRotateManipulator>::sInstance{};
+-  CScrLuaMetatableFactory<CThrustManipulator> CScrLuaMetatableFactory<CThrustManipulator>::sInstance{};
++  // CScrLuaMetatableFactory<CBoneEntityManipulator> is the primary template: one definition in every translation unit.
++  // CScrLuaMetatableFactory<CBuilderArmManipulator> is the primary template: one definition in every translation unit.
++  // CScrLuaMetatableFactory<CFootPlantManipulator> is the primary template: one definition in every translation unit.
++  // CScrLuaMetatableFactory<Entity> is the primary template: one definition in every translation unit.
++  // CScrLuaMetatableFactory<CRotateManipulator> is the primary template: one definition in every translation unit.
++  // CScrLuaMetatableFactory<CThrustManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CBoneEntityManipulator>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-  {}
++  // CScrLuaMetatableFactory<CBoneEntityManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CBoneEntityManipulator>& CScrLuaMetatableFactory<CBoneEntityManipulator>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CBoneEntityManipulator> is the primary template: one definition in every translation unit.
+ 
+   /**
+    * Address: 0x00635490 (FUN_00635490)
+@@ -210,80 +133,37 @@ namespace moho
+     return &instance;
+   }
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CBoneEntityManipulator>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CBoneEntityManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CBuilderArmManipulator>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-  {}
++  // CScrLuaMetatableFactory<CBuilderArmManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CBuilderArmManipulator>& CScrLuaMetatableFactory<CBuilderArmManipulator>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CBuilderArmManipulator> is the primary template: one definition in every translation unit.
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CBuilderArmManipulator>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CBuilderArmManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CFootPlantManipulator>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-  {}
++  // CScrLuaMetatableFactory<CFootPlantManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CFootPlantManipulator>& CScrLuaMetatableFactory<CFootPlantManipulator>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CFootPlantManipulator> is the primary template: one definition in every translation unit.
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CFootPlantManipulator>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CFootPlantManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<Entity>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-  {}
++  // CScrLuaMetatableFactory<Entity> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<Entity>& CScrLuaMetatableFactory<Entity>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<Entity> is the primary template: one definition in every translation unit.
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<Entity>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<Entity> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CRotateManipulator>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-  {}
++  // CScrLuaMetatableFactory<CRotateManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CRotateManipulator>& CScrLuaMetatableFactory<CRotateManipulator>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CRotateManipulator> is the primary template: one definition in every translation unit.
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CRotateManipulator>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CRotateManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CThrustManipulator>::CScrLuaMetatableFactory()
+-    : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-  {}
++  // CScrLuaMetatableFactory<CThrustManipulator> is the primary template: one definition in every translation unit.
+ 
+-  CScrLuaMetatableFactory<CThrustManipulator>& CScrLuaMetatableFactory<CThrustManipulator>::Instance()
+-  {
+-    return sInstance;
+-  }
++  // CScrLuaMetatableFactory<CThrustManipulator> is the primary template: one definition in every translation unit.
+ 
+-  LuaPlus::LuaObject CScrLuaMetatableFactory<CThrustManipulator>::Create(LuaPlus::LuaState* const state)
+-  {
+-    return SCR_CreateSimpleMetatable(state);
+-  }
++  // CScrLuaMetatableFactory<CThrustManipulator> is the primary template: one definition in every translation unit.
+ 
+   LuaPlus::LuaObject CreateRotateManipulatorLuaMetatable(LuaPlus::LuaState* const state)
+   {
+diff --git a/src/sdk/moho/ui/UiRuntimeTypes.cpp b/src/sdk/moho/ui/UiRuntimeTypes.cpp
+index 155a5273..10a00479 100644
+--- a/src/sdk/moho/ui/UiRuntimeTypes.cpp
++++ b/src/sdk/moho/ui/UiRuntimeTypes.cpp
+@@ -177,288 +177,84 @@ namespace moho
+ 
+ namespace moho
+ {
+-  template <>
+-  class CScrLuaMetatableFactory<CLuaWldUIProvider> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CLuaWldUIProvider> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CLuaWldUIProvider>) == 0x8,
+     "CScrLuaMetatableFactory<CLuaWldUIProvider> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CUIWorldMesh> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CUIWorldMesh> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CUIWorldMesh>) == 0x8,
+     "CScrLuaMetatableFactory<CUIWorldMesh> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CUIWorldView> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CUIWorldView> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CUIWorldView>) == 0x8,
+     "CScrLuaMetatableFactory<CUIWorldView> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CUIMapPreview> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CUIMapPreview> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CUIMapPreview>) == 0x8,
+     "CScrLuaMetatableFactory<CUIMapPreview> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CMauiControl> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00783070 (FUN_00783070, Moho::CScrLuaMetatableFactory<Moho::CMauiControl>::Create)
+-     *
+-     * What it does:
+-     * Builds one simple Lua metatable object for `CMauiControl`.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CMauiControl> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CMauiControl>) == 0x8,
+     "CScrLuaMetatableFactory<CMauiControl> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CMauiBorder> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00786180 (FUN_00786180, Moho::CScrLuaMetatableFactory<Moho::CMauiBorder>::Create)
+-     *
+-     * What it does:
+-     * Builds one simple Lua metatable object for `CMauiBorder`.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CMauiBorder> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CMauiBorder>) == 0x8,
+     "CScrLuaMetatableFactory<CMauiBorder> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CMauiBitmap> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00783040 (FUN_00783040, Moho::CScrLuaMetatableFactory<Moho::CMauiBitmap>::Create)
+-     *
+-     * What it does:
+-     * Builds one simple Lua metatable object for `CMauiBitmap`.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CMauiBitmap> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CMauiBitmap>) == 0x8,
+     "CScrLuaMetatableFactory<CMauiBitmap> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CMauiCursor> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x0078D940 (FUN_0078D940, Moho::CScrLuaMetatableFactory<Moho::CMauiCursor>::Create)
+-     *
+-     * What it does:
+-     * Builds one simple Lua metatable object for `CMauiCursor`.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CMauiCursor> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CMauiCursor>) == 0x8,
+     "CScrLuaMetatableFactory<CMauiCursor> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CMauiLuaDragger> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x0078E660 (FUN_0078E660, Moho::CScrLuaMetatableFactory<Moho::CMauiLuaDragger>::Create)
+-     *
+-     * What it does:
+-     * Builds one simple Lua metatable object for `CMauiLuaDragger`.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CMauiLuaDragger> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CMauiLuaDragger>) == 0x8,
+     "CScrLuaMetatableFactory<CMauiLuaDragger> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CMauiEdit> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x00794E90 (FUN_00794E90, Moho::CScrLuaMetatableFactory<Moho::CMauiEdit>::Create)
+-     *
+-     * What it does:
+-     * Builds one simple Lua metatable object for `CMauiEdit`.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CMauiEdit> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CMauiEdit>) == 0x8,
+     "CScrLuaMetatableFactory<CMauiEdit> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CMauiScrollbar> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x007A2470 (FUN_007A2470, Moho::CScrLuaMetatableFactory<Moho::CMauiScrollbar>::Create)
+-     *
+-     * What it does:
+-     * Builds one simple Lua metatable object for `CMauiScrollbar`.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CMauiScrollbar> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CMauiScrollbar>) == 0x8,
+     "CScrLuaMetatableFactory<CMauiScrollbar> size must be 0x8"
+   );
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<CMauiText> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    /**
+-     * Address: 0x007A4250 (FUN_007A4250, Moho::CScrLuaMetatableFactory<Moho::CMauiText>::Create)
+-     *
+-     * What it does:
+-     * Builds one simple Lua metatable object for `CMauiText`.
+-     */
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<CMauiText> is the primary template: one definition in every translation unit.
+ 
+   static_assert(
+     sizeof(CScrLuaMetatableFactory<CMauiText>) == 0x8,
+@@ -3456,93 +3252,46 @@ bool moho::MAUI_KeyIsDown(
+   return ::GetKeyState(virtualKey) < 0;
+ }
+ 
+-moho::CScrLuaMetatableFactory<moho::CUIWorldView> moho::CScrLuaMetatableFactory<moho::CUIWorldView>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CLuaWldUIProvider>
+-  moho::CScrLuaMetatableFactory<moho::CLuaWldUIProvider>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CUIWorldMesh> moho::CScrLuaMetatableFactory<moho::CUIWorldMesh>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CUIMapPreview> moho::CScrLuaMetatableFactory<moho::CUIMapPreview>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CMauiControl> moho::CScrLuaMetatableFactory<moho::CMauiControl>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CMauiBorder> moho::CScrLuaMetatableFactory<moho::CMauiBorder>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CMauiBitmap> moho::CScrLuaMetatableFactory<moho::CMauiBitmap>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CMauiCursor> moho::CScrLuaMetatableFactory<moho::CMauiCursor>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CMauiLuaDragger> moho::CScrLuaMetatableFactory<moho::CMauiLuaDragger>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CMauiEdit> moho::CScrLuaMetatableFactory<moho::CMauiEdit>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CMauiScrollbar> moho::CScrLuaMetatableFactory<moho::CMauiScrollbar>::sInstance{};
+-moho::CScrLuaMetatableFactory<moho::CMauiText> moho::CScrLuaMetatableFactory<moho::CMauiText>::sInstance{};
+-
+-moho::CScrLuaMetatableFactory<moho::CLuaWldUIProvider>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CUIWorldView> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CLuaWldUIProvider> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CUIWorldMesh> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CUIMapPreview> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CMauiControl> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CMauiBorder> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CMauiBitmap> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CMauiCursor> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CMauiLuaDragger> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CMauiEdit> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CMauiScrollbar> is the primary template: one definition in every translation unit.
++// CScrLuaMetatableFactory<CMauiText> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CLuaWldUIProvider>&
+-moho::CScrLuaMetatableFactory<moho::CLuaWldUIProvider>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CLuaWldUIProvider> is the primary template: one definition in every translation unit.
+ 
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CLuaWldUIProvider>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CLuaWldUIProvider> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CUIWorldMesh>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CLuaWldUIProvider> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CUIWorldMesh>& moho::CScrLuaMetatableFactory<moho::CUIWorldMesh>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CUIWorldMesh> is the primary template: one definition in every translation unit.
+ 
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CUIWorldMesh>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CUIWorldMesh> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CUIWorldView>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CUIWorldMesh> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CUIWorldView>& moho::CScrLuaMetatableFactory<moho::CUIWorldView>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CUIWorldView> is the primary template: one definition in every translation unit.
+ 
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CUIWorldView>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CUIWorldView> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CUIMapPreview>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CUIWorldView> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CUIMapPreview>& moho::CScrLuaMetatableFactory<moho::CUIMapPreview>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CUIMapPreview> is the primary template: one definition in every translation unit.
+ 
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CUIMapPreview>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CUIMapPreview> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiControl>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CUIMapPreview> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiControl>& moho::CScrLuaMetatableFactory<moho::CMauiControl>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CMauiControl> is the primary template: one definition in every translation unit.
++
++// CScrLuaMetatableFactory<CMauiControl> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00783EA0 (FUN_00783EA0)
+@@ -3565,21 +3314,11 @@ startup_CScrLuaMetatableFactory_CMauiControl_Index()
+  * What it does:
+  * Builds one simple Lua metatable object for `CMauiControl`.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CMauiControl>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CMauiControl> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiBorder>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CMauiBorder> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiBorder>& moho::CScrLuaMetatableFactory<moho::CMauiBorder>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CMauiBorder> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x007862E0 (FUN_007862E0)
+@@ -3602,21 +3341,11 @@ startup_CScrLuaMetatableFactory_CMauiBorder_Index()
+  * What it does:
+  * Builds one simple Lua metatable object for `CMauiBorder`.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CMauiBorder>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CMauiBorder> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiBitmap>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CMauiBitmap> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiBitmap>& moho::CScrLuaMetatableFactory<moho::CMauiBitmap>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CMauiBitmap> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00783E70 (FUN_00783E70)
+@@ -3639,21 +3368,11 @@ startup_CScrLuaMetatableFactory_CMauiBitmap_Index()
+  * What it does:
+  * Builds one simple Lua metatable object for `CMauiBitmap`.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CMauiBitmap>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CMauiBitmap> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiCursor>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CMauiCursor> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiCursor>& moho::CScrLuaMetatableFactory<moho::CMauiCursor>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CMauiCursor> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x0078DAA0 (FUN_0078DAA0)
+@@ -3676,21 +3395,11 @@ startup_CScrLuaMetatableFactory_CMauiCursor_Index()
+  * What it does:
+  * Builds one simple Lua metatable object for `CMauiCursor`.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CMauiCursor>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CMauiCursor> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiLuaDragger>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CMauiLuaDragger> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiLuaDragger>& moho::CScrLuaMetatableFactory<moho::CMauiLuaDragger>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CMauiLuaDragger> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x0078EAF0 (FUN_0078EAF0)
+@@ -3713,21 +3422,11 @@ startup_CScrLuaMetatableFactory_CMauiLuaDragger_Index()
+  * What it does:
+  * Builds one simple Lua metatable object for `CMauiLuaDragger`.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CMauiLuaDragger>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CMauiLuaDragger> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiEdit>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CMauiEdit> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiEdit>& moho::CScrLuaMetatableFactory<moho::CMauiEdit>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CMauiEdit> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00795610 (FUN_00795610)
+@@ -3750,21 +3449,11 @@ startup_CScrLuaMetatableFactory_CMauiEdit_Index()
+  * What it does:
+  * Builds one simple Lua metatable object for `CMauiEdit`.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CMauiEdit>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CMauiEdit> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiScrollbar>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CMauiScrollbar> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiScrollbar>& moho::CScrLuaMetatableFactory<moho::CMauiScrollbar>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CMauiScrollbar> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x007A2470 (FUN_007A2470, Moho::CScrLuaMetatableFactory<Moho::CMauiScrollbar>::Create)
+@@ -3772,21 +3461,11 @@ moho::CScrLuaMetatableFactory<moho::CMauiScrollbar>& moho::CScrLuaMetatableFacto
+  * What it does:
+  * Builds one simple Lua metatable object for `CMauiScrollbar`.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CMauiScrollbar>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CMauiScrollbar> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiText>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory()
+-{}
++// CScrLuaMetatableFactory<CMauiText> is the primary template: one definition in every translation unit.
+ 
+-moho::CScrLuaMetatableFactory<moho::CMauiText>& moho::CScrLuaMetatableFactory<moho::CMauiText>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<CMauiText> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x007A4250 (FUN_007A4250, Moho::CScrLuaMetatableFactory<Moho::CMauiText>::Create)
+@@ -3794,12 +3473,7 @@ moho::CScrLuaMetatableFactory<moho::CMauiText>& moho::CScrLuaMetatableFactory<mo
+  * What it does:
+  * Builds one simple Lua metatable object for `CMauiText`.
+  */
+-LuaPlus::LuaObject moho::CScrLuaMetatableFactory<moho::CMauiText>::Create(
+-  LuaPlus::LuaState* const state
+-)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<CMauiText> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x00798BB0 (FUN_00798BB0, register_CScrLuaMetatableFactory_CMauiHistogram_Index)
+diff --git a/src/sdk/moho/unit/core/Unit.cpp b/src/sdk/moho/unit/core/Unit.cpp
+index 18c017ee..fef6390c 100644
+--- a/src/sdk/moho/unit/core/Unit.cpp
++++ b/src/sdk/moho/unit/core/Unit.cpp
+@@ -868,20 +868,7 @@ namespace moho
+    */
+   int cfunc_UnitGetStatL(LuaPlus::LuaState* state);
+ 
+-  template <>
+-  class CScrLuaMetatableFactory<Unit> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<Unit> is the primary template: one definition in every translation unit.
+ 
+   static_assert(sizeof(CScrLuaMetatableFactory<Unit>) == 0x08, "CScrLuaMetatableFactory<Unit> size must be 0x08");
+ } // namespace moho
+@@ -2315,21 +2302,13 @@ moho::Unit* moho::SCR_GetUnitOptional(const LuaPlus::LuaObject& unitObject)
+   return static_cast<Unit*>(unitRef.mObj);
+ }
+ 
+-CScrLuaMetatableFactory<Unit> CScrLuaMetatableFactory<Unit>::sInstance{};
++// CScrLuaMetatableFactory<Unit> is the primary template: one definition in every translation unit.
+ 
+-CScrLuaMetatableFactory<Unit>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<Unit> is the primary template: one definition in every translation unit.
+ 
+-CScrLuaMetatableFactory<Unit>& CScrLuaMetatableFactory<Unit>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<Unit> is the primary template: one definition in every translation unit.
+ 
+-LuaPlus::LuaObject CScrLuaMetatableFactory<Unit>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<Unit> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x0067F080 (FUN_0067F080, func_GetUnitFactory)
+diff --git a/src/sdk/moho/unit/core/UserUnit.cpp b/src/sdk/moho/unit/core/UserUnit.cpp
+index c1a83f89..830a7f7d 100644
+--- a/src/sdk/moho/unit/core/UserUnit.cpp
++++ b/src/sdk/moho/unit/core/UserUnit.cpp
+@@ -53,20 +53,7 @@ using namespace moho;
+ 
+ namespace moho
+ {
+-  template <>
+-  class CScrLuaMetatableFactory<UserUnit> final : public CScrLuaObjectFactory
+-  {
+-  public:
+-    CScrLuaMetatableFactory();
+-
+-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+-
+-  protected:
+-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+-
+-  private:
+-    static CScrLuaMetatableFactory sInstance;
+-  };
++  // CScrLuaMetatableFactory<UserUnit> is the primary template: one definition in every translation unit.
+ 
+   static_assert(sizeof(CScrLuaMetatableFactory<UserUnit>) == 0x08, "CScrLuaMetatableFactory<UserUnit> size must be 0x08");
+ } // namespace moho
+@@ -1562,16 +1549,11 @@ namespace
+   }
+ } // namespace
+ 
+-CScrLuaMetatableFactory<UserUnit> CScrLuaMetatableFactory<UserUnit>::sInstance{};
++// CScrLuaMetatableFactory<UserUnit> is the primary template: one definition in every translation unit.
+ 
+-CScrLuaMetatableFactory<UserUnit>::CScrLuaMetatableFactory()
+-  : CScrLuaObjectFactory(CScrLuaObjectFactory::AllocateFactoryObjectIndex())
+-{}
++// CScrLuaMetatableFactory<UserUnit> is the primary template: one definition in every translation unit.
+ 
+-CScrLuaMetatableFactory<UserUnit>& CScrLuaMetatableFactory<UserUnit>::Instance()
+-{
+-  return sInstance;
+-}
++// CScrLuaMetatableFactory<UserUnit> is the primary template: one definition in every translation unit.
+ 
+ /**
+  * Address: 0x008C63B0 (FUN_008C63B0)
+@@ -1908,10 +1890,7 @@ namespace moho
+  * What it does:
+  * Builds the simple Lua metatable used for `UserUnit` userdata bindings.
+  */
+-LuaPlus::LuaObject CScrLuaMetatableFactory<UserUnit>::Create(LuaPlus::LuaState* const state)
+-{
+-  return SCR_CreateSimpleMetatable(state);
+-}
++// CScrLuaMetatableFactory<UserUnit> is the primary template: one definition in every translation unit.
+ 
+ namespace
+ {
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,1053 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{2CB49086-4D27-765D-E093-2579A0302DA9}</ProjectGuid>
+    <RootNamespace>Foundation</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <FafRepoRoot Condition="'$(SolutionPath)' != ''">$(SolutionDir)</FafRepoRoot>
+    <FafRepoRoot Condition="'$(SolutionPath)' == ''">$(MSBuildProjectDirectory)\..\..\..\</FafRepoRoot>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <OutDir>$(FafRepoRoot)output\$(ProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(FafRepoRoot)buildstage\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <OutDir>$(FafRepoRoot)output\$(ProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(FafRepoRoot)buildstage\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(FafRepoRoot)output\$(ProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(FafRepoRoot)buildstage\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(FafRepoRoot)output\$(ProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(FafRepoRoot)buildstage\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <!-- Must track src\sdk\main.vcxproj, which pins _ITERATOR_DEBUG_LEVEL to 0
+           in Debug. The setting changes the size of every std container, so the
+           two have to agree; MSVC records it per object and the linker rejects a
+           mismatch outright (LNK2038 on Wm3System.obj / Wm3Math.obj /
+           Wm3Vector3.obj, which are the Foundation objects that use them). -->
+      <PreprocessorDefinitions>WIN32;_DEBUG;_ITERATOR_DEBUG_LEVEL=0;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>false</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <AdditionalOptions>/MP4 /FS /wd4267 /wd4244 /wd4305 /wd4018 /wd4146 /wd4800 /wd4996 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>.;Approximation;Collision;Containment;Controllers;Curves;Detail;Distance;Effects;ImageAnalysis;Interpolation;Intersection;Math;Meshes;Miscellaneous;Numerics;ObjectSystem;Physics;RationalArithmetic;SceneGraph;Shaders;SharedArrays;Sorting;Surfaces;System;Terrain;Tessellation;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4267;4244;4305;4018;4146;4800;4996</DisableSpecificWarnings>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <Lib>
+      <TargetMachine>MachineX86</TargetMachine>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>false</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <AdditionalOptions>/MP4 /FS /wd4267 /wd4244 /wd4305 /wd4018 /wd4146 /wd4800 /wd4996 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>.;Approximation;Collision;Containment;Controllers;Curves;Detail;Distance;Effects;ImageAnalysis;Interpolation;Intersection;Math;Meshes;Miscellaneous;Numerics;ObjectSystem;Physics;RationalArithmetic;SceneGraph;Shaders;SharedArrays;Sorting;Surfaces;System;Terrain;Tessellation;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4267;4244;4305;4018;4146;4800;4996</DisableSpecificWarnings>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <Lib>
+      <TargetMachine>MachineX86</TargetMachine>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <!-- Same pin as Debug|Win32, for main.vcxproj's Debug|x64. -->
+      <PreprocessorDefinitions>WIN32;_DEBUG;_ITERATOR_DEBUG_LEVEL=0;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>false</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <AdditionalOptions>/MP4 /FS /wd4267 /wd4244 /wd4305 /wd4018 /wd4146 /wd4800 /wd4996 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>.;Approximation;Collision;Containment;Controllers;Curves;Detail;Distance;Effects;ImageAnalysis;Interpolation;Intersection;Math;Meshes;Miscellaneous;Numerics;ObjectSystem;Physics;RationalArithmetic;SceneGraph;Shaders;SharedArrays;Sorting;Surfaces;System;Terrain;Tessellation;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4267;4244;4305;4018;4146;4800;4996</DisableSpecificWarnings>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <Lib>
+      <TargetMachine>MachineX64</TargetMachine>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>false</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <AdditionalOptions>/MP4 /FS /wd4267 /wd4244 /wd4305 /wd4018 /wd4146 /wd4800 /wd4996 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>.;Approximation;Collision;Containment;Controllers;Curves;Detail;Distance;Effects;ImageAnalysis;Interpolation;Intersection;Math;Meshes;Miscellaneous;Numerics;ObjectSystem;Physics;RationalArithmetic;SceneGraph;Shaders;SharedArrays;Sorting;Surfaces;System;Terrain;Tessellation;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4267;4244;4305;4018;4146;4800;4996</DisableSpecificWarnings>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <Lib>
+      <TargetMachine>MachineX64</TargetMachine>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="Approximation\Wm3ApprCircleFit2.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprCylinderFit3.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprEllipseFit2.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprEllipsoidFit3.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprGaussPointsFit2.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprGaussPointsFit3.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprLineFit2.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprLineFit3.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprParaboloidFit3.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprPlaneFit3.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprPolyFit2.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprPolyFit3.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprPolyFit4.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprQuadraticFit2.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprQuadraticFit3.cpp" />
+    <ClCompile Include="Approximation\Wm3ApprSphereFit3.cpp" />
+    <ClCompile Include="Collision\Wm3BoundingVolumeTree.cpp" />
+    <ClCompile Include="Collision\Wm3BoxBVTree.cpp" />
+    <ClCompile Include="Collision\Wm3CollisionGroup.cpp" />
+    <ClCompile Include="Collision\Wm3CollisionRecord.cpp" />
+    <ClCompile Include="Collision\Wm3SphereBVTree.cpp" />
+    <ClCompile Include="Containment\Wm3ContBox2.cpp" />
+    <ClCompile Include="Containment\Wm3ContBox3.cpp" />
+    <ClCompile Include="Containment\Wm3ContConvexHull2.cpp" />
+    <ClCompile Include="Containment\Wm3ContConvexHull3.cpp" />
+    <ClCompile Include="Containment\Wm3ContCapsule3.cpp" />
+    <ClCompile Include="Containment\Wm3ContCircle2.cpp" />
+    <ClCompile Include="Containment\Wm3ContCylinder3.cpp" />
+    <ClCompile Include="Containment\Wm3ContEllipse2.cpp" />
+    <ClCompile Include="Containment\Wm3ContEllipsoid3.cpp" />
+    <ClCompile Include="Containment\Wm3ContLozenge3.cpp" />
+    <ClCompile Include="Containment\Wm3ContPointInPolygon2.cpp" />
+    <ClCompile Include="Containment\Wm3ContScribeCircle2.cpp" />
+    <ClCompile Include="Containment\Wm3ContScribeCircle3Sphere3.cpp" />
+    <ClCompile Include="Containment\Wm3ContSeparatePoints2.cpp" />
+    <ClCompile Include="Containment\Wm3ContSeparatePoints3.cpp" />
+    <ClCompile Include="Containment\Wm3ContSphere3.cpp" />
+    <ClCompile Include="Controllers\Wm3Controller.cpp" />
+    <ClCompile Include="Controllers\Wm3IKController.cpp" />
+    <ClCompile Include="Controllers\Wm3IKGoal.cpp" />
+    <ClCompile Include="Controllers\Wm3IKJoint.cpp" />
+    <ClCompile Include="Controllers\Wm3KeyframeController.cpp" />
+    <ClCompile Include="Controllers\Wm3MorphController.cpp" />
+    <ClCompile Include="Controllers\Wm3ParticleController.cpp" />
+    <ClCompile Include="Controllers\Wm3PointController.cpp" />
+    <ClCompile Include="Controllers\Wm3SkinController.cpp" />
+    <ClCompile Include="Curves\Wm3BezierCurve2.cpp" />
+    <ClCompile Include="Curves\Wm3BezierCurve3.cpp" />
+    <ClCompile Include="Curves\Wm3BSplineBasis.cpp" />
+    <ClCompile Include="Curves\Wm3BSplineCurve2.cpp" />
+    <ClCompile Include="Curves\Wm3BSplineCurve3.cpp" />
+    <ClCompile Include="Curves\Wm3BSplineReduction.cpp" />
+    <ClCompile Include="Curves\Wm3CubicPolynomialCurve2.cpp" />
+    <ClCompile Include="Curves\Wm3CubicPolynomialCurve3.cpp" />
+    <ClCompile Include="Curves\Wm3Curve2.cpp" />
+    <ClCompile Include="Curves\Wm3Curve3.cpp" />
+    <ClCompile Include="Curves\Wm3CurveMesh.cpp" />
+    <ClCompile Include="Curves\Wm3CurveSegment.cpp" />
+    <ClCompile Include="Curves\Wm3MultipleCurve2.cpp" />
+    <ClCompile Include="Curves\Wm3MultipleCurve3.cpp" />
+    <ClCompile Include="Curves\Wm3NaturalSpline2.cpp" />
+    <ClCompile Include="Curves\Wm3NaturalSpline3.cpp" />
+    <ClCompile Include="Curves\Wm3NURBSCurve2.cpp" />
+    <ClCompile Include="Curves\Wm3NURBSCurve3.cpp" />
+    <ClCompile Include="Curves\Wm3PolynomialCurve2.cpp" />
+    <ClCompile Include="Curves\Wm3PolynomialCurve3.cpp" />
+    <ClCompile Include="Curves\Wm3SingleCurve2.cpp" />
+    <ClCompile Include="Curves\Wm3SingleCurve3.cpp" />
+    <ClCompile Include="Curves\Wm3TCBSpline2.cpp" />
+    <ClCompile Include="Curves\Wm3TCBSpline3.cpp" />
+    <ClCompile Include="Detail\Wm3BillboardNode.cpp" />
+    <ClCompile Include="Detail\Wm3ClodMesh.cpp" />
+    <ClCompile Include="Detail\Wm3CollapseRecord.cpp" />
+    <ClCompile Include="Detail\Wm3CreateClodMesh.cpp" />
+    <ClCompile Include="Detail\Wm3DlodNode.cpp" />
+    <ClCompile Include="Detail\Wm3SwitchNode.cpp" />
+    <ClCompile Include="Distance\Wm3Distance.cpp" />
+    <ClCompile Include="Distance\Wm3DistCircle3Circle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistLine3Box3.cpp" />
+    <ClCompile Include="Distance\Wm3DistLine3Circle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistLine3Line3.cpp" />
+    <ClCompile Include="Distance\Wm3DistLine3Ray3.cpp" />
+    <ClCompile Include="Distance\Wm3DistLine3Rectangle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistLine3Segment3.cpp" />
+    <ClCompile Include="Distance\Wm3DistLine3Triangle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistRay3Box3.cpp" />
+    <ClCompile Include="Distance\Wm3DistRay3Ray3.cpp" />
+    <ClCompile Include="Distance\Wm3DistRay3Rectangle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistRay3Segment3.cpp" />
+    <ClCompile Include="Distance\Wm3DistRay3Triangle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistRectangle3Rectangle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistSegment3Box3.cpp" />
+    <ClCompile Include="Distance\Wm3DistSegment3Rectangle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistSegment3Segment3.cpp" />
+    <ClCompile Include="Distance\Wm3DistSegment3Triangle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistTriangle3Rectangle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistTriangle3Triangle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector2Box2.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector2Ellipse2.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector2Line2.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector2Ray2.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector2Segment2.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector3Box3.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector3Circle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector3Ellipsoid3.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector3Frustum3.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector3Line3.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector3Plane3.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector3Ray3.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector3Rectangle3.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector3Segment3.cpp" />
+    <ClCompile Include="Distance\Wm3DistVector3Triangle3.cpp" />
+    <ClCompile Include="Effects\Wm3BumpMapEffect.cpp" />
+    <ClCompile Include="Effects\Wm3DarkMapEffect.cpp" />
+    <ClCompile Include="Effects\Wm3Effect.cpp" />
+    <ClCompile Include="Effects\Wm3EnvironmentMapEffect.cpp" />
+    <ClCompile Include="Effects\Wm3GlossMapEffect.cpp" />
+    <ClCompile Include="Effects\Wm3LightMapEffect.cpp" />
+    <ClCompile Include="Effects\Wm3PlanarReflectionEffect.cpp" />
+    <ClCompile Include="Effects\Wm3PlanarShadowEffect.cpp" />
+    <ClCompile Include="Effects\Wm3ProjectedTextureEffect.cpp" />
+    <ClCompile Include="Effects\Wm3TextureEffect.cpp" />
+    <ClCompile Include="Effects\Wm3VertexColorEffect.cpp" />
+    <ClCompile Include="ImageAnalysis\Wm3Binary2D.cpp" />
+    <ClCompile Include="ImageAnalysis\Wm3Binary3D.cpp" />
+    <ClCompile Include="ImageAnalysis\Wm3Element.cpp" />
+    <ClCompile Include="ImageAnalysis\Wm3ExtractSurfaceCubes.cpp" />
+    <ClCompile Include="ImageAnalysis\Wm3ExtractSurfaceTetra.cpp" />
+    <ClCompile Include="ImageAnalysis\Wm3FastBlur.cpp" />
+    <ClCompile Include="ImageAnalysis\Wm3ImageConvert.cpp" />
+    <ClCompile Include="ImageAnalysis\Wm3Images.cpp" />
+    <ClCompile Include="ImageAnalysis\Wm3Lattice.cpp" />
+    <ClCompile Include="ImageAnalysis\Wm3RasterDrawing.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpAkima1.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpAkimaNonuniform1.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpAkimaUniform1.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpAkimaUniform2.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpAkimaUniform3.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpBicubic2.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpBilinear2.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpBSplineUniform.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpBSplineUniform1.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpBSplineUniform2.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpBSplineUniform3.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpBSplineUniform4.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpBSplineUniformN.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpLinearNonuniform2.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpLinearNonuniform3.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpQdrNonuniform2.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpSphere2.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpThinPlateSpline2.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpThinPlateSpline3.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpTricubic3.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpTrilinear3.cpp" />
+    <ClCompile Include="Interpolation\Wm3IntpVectorField2.cpp" />
+    <ClCompile Include="Intersection\Wm3Intersector.cpp" />
+    <ClCompile Include="Intersection\Wm3Intersector1.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrArc2Arc2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrArc2Circle2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrBox2Box2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrBox2Circle2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrBox3Box3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrBox3Frustum3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrBox3Sphere3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrCapsule3Capsule3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrCircle2Circle2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrCircle3Plane3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrEllipse2Ellipse2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLinComp2LinComp2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLinComp2Triangle2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine2Arc2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine2Box2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine2Circle2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine3Box3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine3Capsule3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine3Cone3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine3Cylinder3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine3Ellipsoid3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine3Lozenge3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine3Sphere3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine3Torus3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLine3Triangle3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrLozenge3Lozenge3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrPlane3Box3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrPlane3Capsule3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrPlane3Cylinder3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrPlane3Ellipsoid3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrPlane3Lozenge3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrPlane3Plane3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrPlane3Sphere3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrRay2Arc2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrRay2Box2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrRay2Circle2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrRay3Box3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrRay3Capsule3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrRay3Cylinder3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrRay3Ellipsoid3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrRay3Lozenge3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrRay3Sphere3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrRay3Triangle3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSegment2Arc2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSegment2Box2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSegment2Circle2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSegment3Box3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSegment3Capsule3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSegment3Cylinder3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSegment3Ellipsoid3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSegment3Lozenge3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSegment3Sphere3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSegment3Triangle3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSphere3Cone3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSphere3Frustum3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrSphere3Sphere3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrTetrahedron3Tetrahedron3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrTriangle2Triangle2.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrTriangle3Cone3.cpp" />
+    <ClCompile Include="Intersection\Wm3IntrTriangle3Triangle3.cpp" />
+    <ClCompile Include="Math\Wm3ColorRGB.cpp" />
+    <ClCompile Include="Math\Wm3ColorRGBA.cpp" />
+    <ClCompile Include="Math\Wm3Math.cpp" />
+    <ClCompile Include="Math\Wm3Matrix2.cpp" />
+    <ClCompile Include="Math\Wm3Matrix3.cpp" />
+    <ClCompile Include="Math\Wm3Matrix4.cpp" />
+    <ClCompile Include="Math\Wm3Quaternion.cpp" />
+    <ClCompile Include="Math\Wm3Vector2.cpp" />
+    <ClCompile Include="Math\Wm3Vector3.cpp" />
+    <ClCompile Include="Math\Wm3Vector4.cpp" />
+    <ClCompile Include="Meshes\Wm3BasicMesh.cpp" />
+    <ClCompile Include="Meshes\Wm3ETManifoldMesh.cpp" />
+    <ClCompile Include="Meshes\Wm3ETNonmanifoldMesh.cpp" />
+    <ClCompile Include="Miscellaneous\Wm3NormalCompression.cpp" />
+    <ClCompile Include="Miscellaneous\Wm3PerspProjEllipsoid.cpp" />
+    <ClCompile Include="Miscellaneous\Wm3QuadToQuadTransforms.cpp" />
+    <ClCompile Include="Miscellaneous\Wm3RandomHypersphere.cpp" />
+    <ClCompile Include="Numerics\Wm3Bisect1.cpp" />
+    <ClCompile Include="Numerics\Wm3Bisect2.cpp" />
+    <ClCompile Include="Numerics\Wm3Bisect3.cpp" />
+    <ClCompile Include="Numerics\Wm3Eigen.cpp" />
+    <ClCompile Include="Numerics\Wm3Integrate1.cpp" />
+    <ClCompile Include="Numerics\Wm3LinearSystem.cpp" />
+    <ClCompile Include="Numerics\Wm3Minimize1.cpp" />
+    <ClCompile Include="Numerics\Wm3MinimizeN.cpp" />
+    <ClCompile Include="Numerics\Wm3OdeEuler.cpp" />
+    <ClCompile Include="Numerics\Wm3OdeImplicitEuler.cpp" />
+    <ClCompile Include="Numerics\Wm3OdeMidpoint.cpp" />
+    <ClCompile Include="Numerics\Wm3OdeRungeKutta4.cpp" />
+    <ClCompile Include="Numerics\Wm3OdeSolver.cpp" />
+    <ClCompile Include="Numerics\Wm3PolynomialRoots.cpp" />
+    <ClCompile Include="ObjectSystem\Wm3ImageVersion.cpp" />
+    <ClCompile Include="ObjectSystem\Wm3Main.cpp" />
+    <ClCompile Include="ObjectSystem\Wm3Object.cpp" />
+    <ClCompile Include="ObjectSystem\Wm3Rtti.cpp" />
+    <ClCompile Include="ObjectSystem\Wm3Stream.cpp" />
+    <ClCompile Include="ObjectSystem\Wm3StreamVersion.cpp" />
+    <ClCompile Include="ObjectSystem\Wm3StringTree.cpp" />
+    <ClCompile Include="Physics\Wm3BoxSurface.cpp" />
+    <ClCompile Include="Physics\Wm3BSplineVolume.cpp" />
+    <ClCompile Include="Physics\Wm3IntersectingBoxes.cpp" />
+    <ClCompile Include="Physics\Wm3IntersectingIntervals.cpp" />
+    <ClCompile Include="Physics\Wm3IntersectingRectangles.cpp" />
+    <ClCompile Include="Physics\Wm3LCPPolyDist.cpp" />
+    <ClCompile Include="Physics\Wm3LCPSolver.cpp" />
+    <ClCompile Include="Physics\Wm3MassSpringArbitrary.cpp" />
+    <ClCompile Include="Physics\Wm3MassSpringCurve.cpp" />
+    <ClCompile Include="Physics\Wm3MassSpringSurface.cpp" />
+    <ClCompile Include="Physics\Wm3MassSpringVolume.cpp" />
+    <ClCompile Include="Physics\Wm3ParticleSystem.cpp" />
+    <ClCompile Include="Physics\Wm3PolyhedralMassProperties.cpp" />
+    <ClCompile Include="Physics\Wm3RectangleSurface.cpp" />
+    <ClCompile Include="Physics\Wm3RevolutionSurface.cpp" />
+    <ClCompile Include="Physics\Wm3RigidBody.cpp" />
+    <ClCompile Include="Physics\Wm3TubeSurface.cpp" />
+    <ClCompile Include="SceneGraph\Wm3AlphaState.cpp" />
+    <ClCompile Include="SceneGraph\Wm3BindInfo.cpp" />
+    <ClCompile Include="SceneGraph\Wm3BoundingVolume.cpp" />
+    <ClCompile Include="SceneGraph\Wm3BoxBV.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Camera.cpp" />
+    <ClCompile Include="SceneGraph\Wm3CullState.cpp" />
+    <ClCompile Include="SceneGraph\Wm3DitherState.cpp" />
+    <ClCompile Include="SceneGraph\Wm3FogState.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Geometry.cpp" />
+    <ClCompile Include="SceneGraph\Wm3GlobalState.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Image.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Light.cpp" />
+    <ClCompile Include="SceneGraph\Wm3MaterialState.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Node.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Particles.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Polyline.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Polypoint.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Renderer.cpp" />
+    <ClCompile Include="SceneGraph\Wm3ScreenPolygon.cpp" />
+    <ClCompile Include="SceneGraph\Wm3ShadeState.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Spatial.cpp" />
+    <ClCompile Include="SceneGraph\Wm3SphereBV.cpp" />
+    <ClCompile Include="SceneGraph\Wm3StandardMesh.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Texture.cpp" />
+    <ClCompile Include="SceneGraph\Wm3Transformation.cpp" />
+    <ClCompile Include="SceneGraph\Wm3TriMesh.cpp" />
+    <ClCompile Include="SceneGraph\Wm3WireframeState.cpp" />
+    <ClCompile Include="SceneGraph\Wm3ZBufferState.cpp" />
+    <ClCompile Include="Shaders\Wm3PixelShader.cpp" />
+    <ClCompile Include="Shaders\Wm3Shader.cpp" />
+    <ClCompile Include="Shaders\Wm3ShaderConstant.cpp" />
+    <ClCompile Include="Shaders\Wm3ShaderEffect.cpp" />
+    <ClCompile Include="Shaders\Wm3VertexShader.cpp" />
+    <ClCompile Include="SharedArrays\Wm3CachedColorRGBAArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3CachedColorRGBArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3CachedIntArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3CachedVector2fArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3CachedVector3fArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3ColorRGBAArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3ColorRGBArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3DoubleArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3FloatArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3IntArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3Matrix2Array.cpp" />
+    <ClCompile Include="SharedArrays\Wm3Matrix3Array.cpp" />
+    <ClCompile Include="SharedArrays\Wm3Matrix4Array.cpp" />
+    <ClCompile Include="SharedArrays\Wm3Plane3Array.cpp" />
+    <ClCompile Include="SharedArrays\Wm3QuaternionArray.cpp" />
+    <ClCompile Include="SharedArrays\Wm3Vector2Array.cpp" />
+    <ClCompile Include="SharedArrays\Wm3Vector3Array.cpp" />
+    <ClCompile Include="SharedArrays\Wm3Vector4Array.cpp" />
+    <ClCompile Include="Sorting\Wm3BspNode.cpp" />
+    <ClCompile Include="Sorting\Wm3ConvexRegion.cpp" />
+    <ClCompile Include="Sorting\Wm3ConvexRegionManager.cpp" />
+    <ClCompile Include="Sorting\Wm3Portal.cpp" />
+    <ClCompile Include="Surfaces\Wm3BSplineRectangle.cpp" />
+    <ClCompile Include="Surfaces\Wm3ImplicitSurface.cpp" />
+    <ClCompile Include="Surfaces\Wm3NURBSRectangle.cpp" />
+    <ClCompile Include="Surfaces\Wm3ParametricSurface.cpp" />
+    <ClCompile Include="Surfaces\Wm3QuadricSurface.cpp" />
+    <ClCompile Include="Surfaces\Wm3Surface.cpp" />
+    <ClCompile Include="Surfaces\Wm3SurfaceMesh.cpp" />
+    <ClCompile Include="Surfaces\Wm3SurfacePatch.cpp" />
+    <ClCompile Include="System\Wm3String.cpp" />
+    <ClCompile Include="System\Wm3System.cpp" />
+    <ClCompile Include="Terrain\Wm3ClodTerrain.cpp" />
+    <ClCompile Include="Terrain\Wm3ClodTerrainBlock.cpp" />
+    <ClCompile Include="Terrain\Wm3ClodTerrainPage.cpp" />
+    <ClCompile Include="Terrain\Wm3ClodTerrainVertex.cpp" />
+    <ClCompile Include="Terrain\Wm3Terrain.cpp" />
+    <ClCompile Include="Terrain\Wm3TerrainPage.cpp" />
+    <ClCompile Include="Tessellation\Wm3Delaunay2.cpp" />
+    <ClCompile Include="Tessellation\Wm3Delaunay3.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Approximation\Wm3ApprCircleFit2.h" />
+    <ClInclude Include="Approximation\Wm3ApprCylinderFit3.h" />
+    <ClInclude Include="Approximation\Wm3ApprEllipseFit2.h" />
+    <ClInclude Include="Approximation\Wm3ApprEllipsoidFit3.h" />
+    <ClInclude Include="Approximation\Wm3ApprGaussPointsFit2.h" />
+    <ClInclude Include="Approximation\Wm3ApprGaussPointsFit3.h" />
+    <ClInclude Include="Approximation\Wm3ApprLineFit2.h" />
+    <ClInclude Include="Approximation\Wm3ApprLineFit3.h" />
+    <ClInclude Include="Approximation\Wm3ApprParaboloidFit3.h" />
+    <ClInclude Include="Approximation\Wm3ApprPlaneFit3.h" />
+    <ClInclude Include="Approximation\Wm3ApprPolyFit2.h" />
+    <ClInclude Include="Approximation\Wm3ApprPolyFit3.h" />
+    <ClInclude Include="Approximation\Wm3ApprPolyFit4.h" />
+    <ClInclude Include="Approximation\Wm3ApprQuadraticFit2.h" />
+    <ClInclude Include="Approximation\Wm3ApprQuadraticFit3.h" />
+    <ClInclude Include="Approximation\Wm3ApprSphereFit3.h" />
+    <ClInclude Include="Collision\Wm3BoundingVolumeTree.h" />
+    <ClInclude Include="Collision\Wm3BoundingVolumeTree.inl" />
+    <ClInclude Include="Collision\Wm3BoxBVTree.h" />
+    <ClInclude Include="Collision\Wm3CollisionGroup.h" />
+    <ClInclude Include="Collision\Wm3CollisionRecord.h" />
+    <ClInclude Include="Collision\Wm3CollisionRecord.inl" />
+    <ClInclude Include="Collision\Wm3SphereBVTree.h" />
+    <ClInclude Include="Containment\Wm3ContBox2.h" />
+    <ClInclude Include="Containment\Wm3ContBox3.h" />
+    <ClInclude Include="Containment\Wm3ContConvexHull2.h" />
+    <ClInclude Include="Containment\Wm3ContConvexHull3.h" />
+    <ClInclude Include="Containment\Wm3ContCapsule3.h" />
+    <ClInclude Include="Containment\Wm3ContCircle2.h" />
+    <ClInclude Include="Containment\Wm3ContCylinder3.h" />
+    <ClInclude Include="Containment\Wm3ContEllipse2.h" />
+    <ClInclude Include="Containment\Wm3ContEllipsoid3.h" />
+    <ClInclude Include="Containment\Wm3ContLozenge3.h" />
+    <ClInclude Include="Containment\Wm3ContPointInPolygon2.h" />
+    <ClInclude Include="Containment\Wm3ContScribeCircle2.h" />
+    <ClInclude Include="Containment\Wm3ContScribeCircle3Sphere3.h" />
+    <ClInclude Include="Containment\Wm3ContSeparatePoints2.h" />
+    <ClInclude Include="Containment\Wm3ContSeparatePoints3.h" />
+    <ClInclude Include="Containment\Wm3ContSphere3.h" />
+    <ClInclude Include="Controllers\Wm3Controller.h" />
+    <ClInclude Include="Controllers\Wm3Controller.inl" />
+    <ClInclude Include="Controllers\Wm3IKController.h" />
+    <ClInclude Include="Controllers\Wm3IKGoal.h" />
+    <ClInclude Include="Controllers\Wm3IKGoal.inl" />
+    <ClInclude Include="Controllers\Wm3IKJoint.h" />
+    <ClInclude Include="Controllers\Wm3KeyframeController.h" />
+    <ClInclude Include="Controllers\Wm3MorphController.h" />
+    <ClInclude Include="Controllers\Wm3MorphController.inl" />
+    <ClInclude Include="Controllers\Wm3ParticleController.h" />
+    <ClInclude Include="Controllers\Wm3ParticleController.inl" />
+    <ClInclude Include="Controllers\Wm3PointController.h" />
+    <ClInclude Include="Controllers\Wm3PointController.inl" />
+    <ClInclude Include="Controllers\Wm3SkinController.h" />
+    <ClInclude Include="Controllers\Wm3SkinController.inl" />
+    <ClInclude Include="Curves\Wm3BezierCurve2.h" />
+    <ClInclude Include="Curves\Wm3BezierCurve3.h" />
+    <ClInclude Include="Curves\Wm3BSplineBasis.h" />
+    <ClInclude Include="Curves\Wm3BSplineCurve2.h" />
+    <ClInclude Include="Curves\Wm3BSplineCurve3.h" />
+    <ClInclude Include="Curves\Wm3BSplineReduction.h" />
+    <ClInclude Include="Curves\Wm3CubicPolynomialCurve2.h" />
+    <ClInclude Include="Curves\Wm3CubicPolynomialCurve3.h" />
+    <ClInclude Include="Curves\Wm3Curve2.h" />
+    <ClInclude Include="Curves\Wm3Curve3.h" />
+    <ClInclude Include="Curves\Wm3CurveMesh.h" />
+    <ClInclude Include="Curves\Wm3CurveMesh.inl" />
+    <ClInclude Include="Curves\Wm3CurveSegment.h" />
+    <ClInclude Include="Curves\Wm3CurveSegment.inl" />
+    <ClInclude Include="Curves\Wm3MultipleCurve2.h" />
+    <ClInclude Include="Curves\Wm3MultipleCurve3.h" />
+    <ClInclude Include="Curves\Wm3NaturalSpline2.h" />
+    <ClInclude Include="Curves\Wm3NaturalSpline3.h" />
+    <ClInclude Include="Curves\Wm3NURBSCurve2.h" />
+    <ClInclude Include="Curves\Wm3NURBSCurve3.h" />
+    <ClInclude Include="Curves\Wm3PolynomialCurve2.h" />
+    <ClInclude Include="Curves\Wm3PolynomialCurve3.h" />
+    <ClInclude Include="Curves\Wm3SingleCurve2.h" />
+    <ClInclude Include="Curves\Wm3SingleCurve3.h" />
+    <ClInclude Include="Curves\Wm3TCBSpline2.h" />
+    <ClInclude Include="Curves\Wm3TCBSpline3.h" />
+    <ClInclude Include="Detail\Wm3BillboardNode.h" />
+    <ClInclude Include="Detail\Wm3BillboardNode.inl" />
+    <ClInclude Include="Detail\Wm3ClodMesh.h" />
+    <ClInclude Include="Detail\Wm3ClodMesh.inl" />
+    <ClInclude Include="Detail\Wm3CollapseRecord.h" />
+    <ClInclude Include="Detail\Wm3CreateClodMesh.h" />
+    <ClInclude Include="Detail\Wm3CreateClodMesh.inl" />
+    <ClInclude Include="Detail\Wm3DlodNode.h" />
+    <ClInclude Include="Detail\Wm3DlodNode.inl" />
+    <ClInclude Include="Detail\Wm3SwitchNode.h" />
+    <ClInclude Include="Detail\Wm3SwitchNode.inl" />
+    <ClInclude Include="Distance\Wm3Distance.h" />
+    <ClInclude Include="Distance\Wm3DistCircle3Circle3.h" />
+    <ClInclude Include="Distance\Wm3DistLine3Box3.h" />
+    <ClInclude Include="Distance\Wm3DistLine3Circle3.h" />
+    <ClInclude Include="Distance\Wm3DistLine3Line3.h" />
+    <ClInclude Include="Distance\Wm3DistLine3Ray3.h" />
+    <ClInclude Include="Distance\Wm3DistLine3Rectangle3.h" />
+    <ClInclude Include="Distance\Wm3DistLine3Segment3.h" />
+    <ClInclude Include="Distance\Wm3DistLine3Triangle3.h" />
+    <ClInclude Include="Distance\Wm3DistRay3Box3.h" />
+    <ClInclude Include="Distance\Wm3DistRay3Ray3.h" />
+    <ClInclude Include="Distance\Wm3DistRay3Rectangle3.h" />
+    <ClInclude Include="Distance\Wm3DistRay3Segment3.h" />
+    <ClInclude Include="Distance\Wm3DistRay3Triangle3.h" />
+    <ClInclude Include="Distance\Wm3DistRectangle3Rectangle3.h" />
+    <ClInclude Include="Distance\Wm3DistSegment3Box3.h" />
+    <ClInclude Include="Distance\Wm3DistSegment3Rectangle3.h" />
+    <ClInclude Include="Distance\Wm3DistSegment3Segment3.h" />
+    <ClInclude Include="Distance\Wm3DistSegment3Triangle3.h" />
+    <ClInclude Include="Distance\Wm3DistTriangle3Rectangle3.h" />
+    <ClInclude Include="Distance\Wm3DistTriangle3Triangle3.h" />
+    <ClInclude Include="Distance\Wm3DistVector2Box2.h" />
+    <ClInclude Include="Distance\Wm3DistVector2Ellipse2.h" />
+    <ClInclude Include="Distance\Wm3DistVector2Line2.h" />
+    <ClInclude Include="Distance\Wm3DistVector2Ray2.h" />
+    <ClInclude Include="Distance\Wm3DistVector2Segment2.h" />
+    <ClInclude Include="Distance\Wm3DistVector3Box3.h" />
+    <ClInclude Include="Distance\Wm3DistVector3Circle3.h" />
+    <ClInclude Include="Distance\Wm3DistVector3Ellipsoid3.h" />
+    <ClInclude Include="Distance\Wm3DistVector3Frustum3.h" />
+    <ClInclude Include="Distance\Wm3DistVector3Line3.h" />
+    <ClInclude Include="Distance\Wm3DistVector3Plane3.h" />
+    <ClInclude Include="Distance\Wm3DistVector3Ray3.h" />
+    <ClInclude Include="Distance\Wm3DistVector3Rectangle3.h" />
+    <ClInclude Include="Distance\Wm3DistVector3Segment3.h" />
+    <ClInclude Include="Distance\Wm3DistVector3Triangle3.h" />
+    <ClInclude Include="Effects\Wm3BumpMapEffect.h" />
+    <ClInclude Include="Effects\Wm3BumpMapEffect.inl" />
+    <ClInclude Include="Effects\Wm3DarkMapEffect.h" />
+    <ClInclude Include="Effects\Wm3Effect.h" />
+    <ClInclude Include="Effects\Wm3EnvironmentMapEffect.h" />
+    <ClInclude Include="Effects\Wm3GlossMapEffect.h" />
+    <ClInclude Include="Effects\Wm3LightMapEffect.h" />
+    <ClInclude Include="Effects\Wm3PlanarReflectionEffect.h" />
+    <ClInclude Include="Effects\Wm3PlanarReflectionEffect.inl" />
+    <ClInclude Include="Effects\Wm3PlanarShadowEffect.h" />
+    <ClInclude Include="Effects\Wm3PlanarShadowEffect.inl" />
+    <ClInclude Include="Effects\Wm3ProjectedTextureEffect.h" />
+    <ClInclude Include="Effects\Wm3ProjectedTextureEffect.inl" />
+    <ClInclude Include="Effects\Wm3TextureEffect.h" />
+    <ClInclude Include="Effects\Wm3VertexColorEffect.h" />
+    <ClInclude Include="ImageAnalysis\Wm3Binary2D.h" />
+    <ClInclude Include="ImageAnalysis\Wm3Binary3D.h" />
+    <ClInclude Include="ImageAnalysis\Wm3Element.h" />
+    <ClInclude Include="ImageAnalysis\Wm3Element.inl" />
+    <ClInclude Include="ImageAnalysis\Wm3ExtractSurfaceCubes.h" />
+    <ClInclude Include="ImageAnalysis\Wm3ExtractSurfaceCubes.inl" />
+    <ClInclude Include="ImageAnalysis\Wm3ExtractSurfaceTetra.h" />
+    <ClInclude Include="ImageAnalysis\Wm3FastBlur.h" />
+    <ClInclude Include="ImageAnalysis\Wm3ImageConvert.h" />
+    <ClInclude Include="ImageAnalysis\Wm3Images.h" />
+    <ClInclude Include="ImageAnalysis\Wm3Lattice.h" />
+    <ClInclude Include="ImageAnalysis\Wm3Lattice.inl" />
+    <ClInclude Include="ImageAnalysis\Wm3RasterDrawing.h" />
+    <ClInclude Include="ImageAnalysis\Wm3TImage.h" />
+    <ClInclude Include="ImageAnalysis\Wm3TImage.inl" />
+    <ClInclude Include="ImageAnalysis\Wm3TImage2D.h" />
+    <ClInclude Include="ImageAnalysis\Wm3TImage2D.inl" />
+    <ClInclude Include="ImageAnalysis\Wm3TImage3D.h" />
+    <ClInclude Include="ImageAnalysis\Wm3TImage3D.inl" />
+    <ClInclude Include="Interpolation\Wm3IntpAkima1.h" />
+    <ClInclude Include="Interpolation\Wm3IntpAkimaNonuniform1.h" />
+    <ClInclude Include="Interpolation\Wm3IntpAkimaUniform1.h" />
+    <ClInclude Include="Interpolation\Wm3IntpAkimaUniform2.h" />
+    <ClInclude Include="Interpolation\Wm3IntpAkimaUniform3.h" />
+    <ClInclude Include="Interpolation\Wm3IntpBicubic2.h" />
+    <ClInclude Include="Interpolation\Wm3IntpBilinear2.h" />
+    <ClInclude Include="Interpolation\Wm3IntpBSplineUniform.h" />
+    <ClInclude Include="Interpolation\Wm3IntpBSplineUniform1.h" />
+    <ClInclude Include="Interpolation\Wm3IntpBSplineUniform2.h" />
+    <ClInclude Include="Interpolation\Wm3IntpBSplineUniform3.h" />
+    <ClInclude Include="Interpolation\Wm3IntpBSplineUniform4.h" />
+    <ClInclude Include="Interpolation\Wm3IntpBSplineUniformN.h" />
+    <ClInclude Include="Interpolation\Wm3IntpLinearNonuniform2.h" />
+    <ClInclude Include="Interpolation\Wm3IntpLinearNonuniform3.h" />
+    <ClInclude Include="Interpolation\Wm3IntpQdrNonuniform2.h" />
+    <ClInclude Include="Interpolation\Wm3IntpSphere2.h" />
+    <ClInclude Include="Interpolation\Wm3IntpThinPlateSpline2.h" />
+    <ClInclude Include="Interpolation\Wm3IntpThinPlateSpline3.h" />
+    <ClInclude Include="Interpolation\Wm3IntpTricubic3.h" />
+    <ClInclude Include="Interpolation\Wm3IntpTrilinear3.h" />
+    <ClInclude Include="Interpolation\Wm3IntpVectorField2.h" />
+    <ClInclude Include="Intersection\Wm3Intersector.h" />
+    <ClInclude Include="Intersection\Wm3Intersector1.h" />
+    <ClInclude Include="Intersection\Wm3IntrArc2Arc2.h" />
+    <ClInclude Include="Intersection\Wm3IntrArc2Circle2.h" />
+    <ClInclude Include="Intersection\Wm3IntrBox2Box2.h" />
+    <ClInclude Include="Intersection\Wm3IntrBox2Circle2.h" />
+    <ClInclude Include="Intersection\Wm3IntrBox3Box3.h" />
+    <ClInclude Include="Intersection\Wm3IntrBox3Frustum3.h" />
+    <ClInclude Include="Intersection\Wm3IntrBox3Sphere3.h" />
+    <ClInclude Include="Intersection\Wm3IntrCapsule3Capsule3.h" />
+    <ClInclude Include="Intersection\Wm3IntrCircle2Circle2.h" />
+    <ClInclude Include="Intersection\Wm3IntrCircle3Plane3.h" />
+    <ClInclude Include="Intersection\Wm3IntrEllipse2Ellipse2.h" />
+    <ClInclude Include="Intersection\Wm3IntrLinComp2LinComp2.h" />
+    <ClInclude Include="Intersection\Wm3IntrLinComp2Triangle2.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine2Arc2.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine2Box2.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine2Circle2.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine3Box3.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine3Capsule3.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine3Cone3.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine3Cylinder3.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine3Ellipsoid3.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine3Lozenge3.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine3Sphere3.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine3Torus3.h" />
+    <ClInclude Include="Intersection\Wm3IntrLine3Triangle3.h" />
+    <ClInclude Include="Intersection\Wm3IntrLozenge3Lozenge3.h" />
+    <ClInclude Include="Intersection\Wm3IntrPlane3Box3.h" />
+    <ClInclude Include="Intersection\Wm3IntrPlane3Capsule3.h" />
+    <ClInclude Include="Intersection\Wm3IntrPlane3Cylinder3.h" />
+    <ClInclude Include="Intersection\Wm3IntrPlane3Ellipsoid3.h" />
+    <ClInclude Include="Intersection\Wm3IntrPlane3Lozenge3.h" />
+    <ClInclude Include="Intersection\Wm3IntrPlane3Plane3.h" />
+    <ClInclude Include="Intersection\Wm3IntrPlane3Sphere3.h" />
+    <ClInclude Include="Intersection\Wm3IntrRay2Arc2.h" />
+    <ClInclude Include="Intersection\Wm3IntrRay2Box2.h" />
+    <ClInclude Include="Intersection\Wm3IntrRay2Circle2.h" />
+    <ClInclude Include="Intersection\Wm3IntrRay3Box3.h" />
+    <ClInclude Include="Intersection\Wm3IntrRay3Capsule3.h" />
+    <ClInclude Include="Intersection\Wm3IntrRay3Cylinder3.h" />
+    <ClInclude Include="Intersection\Wm3IntrRay3Ellipsoid3.h" />
+    <ClInclude Include="Intersection\Wm3IntrRay3Lozenge3.h" />
+    <ClInclude Include="Intersection\Wm3IntrRay3Sphere3.h" />
+    <ClInclude Include="Intersection\Wm3IntrRay3Triangle3.h" />
+    <ClInclude Include="Intersection\Wm3IntrSegment2Arc2.h" />
+    <ClInclude Include="Intersection\Wm3IntrSegment2Box2.h" />
+    <ClInclude Include="Intersection\Wm3IntrSegment2Circle2.h" />
+    <ClInclude Include="Intersection\Wm3IntrSegment3Box3.h" />
+    <ClInclude Include="Intersection\Wm3IntrSegment3Capsule3.h" />
+    <ClInclude Include="Intersection\Wm3IntrSegment3Cylinder3.h" />
+    <ClInclude Include="Intersection\Wm3IntrSegment3Ellipsoid3.h" />
+    <ClInclude Include="Intersection\Wm3IntrSegment3Lozenge3.h" />
+    <ClInclude Include="Intersection\Wm3IntrSegment3Sphere3.h" />
+    <ClInclude Include="Intersection\Wm3IntrSegment3Triangle3.h" />
+    <ClInclude Include="Intersection\Wm3IntrSphere3Cone3.h" />
+    <ClInclude Include="Intersection\Wm3IntrSphere3Frustum3.h" />
+    <ClInclude Include="Intersection\Wm3IntrSphere3Sphere3.h" />
+    <ClInclude Include="Intersection\Wm3IntrTetrahedron3Tetrahedron3.h" />
+    <ClInclude Include="Intersection\Wm3IntrTriangle2Triangle2.h" />
+    <ClInclude Include="Intersection\Wm3IntrTriangle3Cone3.h" />
+    <ClInclude Include="Intersection\Wm3IntrTriangle3Triangle3.h" />
+    <ClInclude Include="Math\Wm3Arc2.h" />
+    <ClInclude Include="Math\Wm3Arc2.inl" />
+    <ClInclude Include="Math\Wm3AxisAlignedBox2.h" />
+    <ClInclude Include="Math\Wm3AxisAlignedBox2.inl" />
+    <ClInclude Include="Math\Wm3AxisAlignedBox3.h" />
+    <ClInclude Include="Math\Wm3AxisAlignedBox3.inl" />
+    <ClInclude Include="Math\Wm3BandedMatrix.h" />
+    <ClInclude Include="Math\Wm3BandedMatrix.inl" />
+    <ClInclude Include="Math\Wm3Box2.h" />
+    <ClInclude Include="Math\Wm3Box2.inl" />
+    <ClInclude Include="Math\Wm3Box3.h" />
+    <ClInclude Include="Math\Wm3Box3.inl" />
+    <ClInclude Include="Math\Wm3Capsule3.h" />
+    <ClInclude Include="Math\Wm3Capsule3.inl" />
+    <ClInclude Include="Math\Wm3Circle2.h" />
+    <ClInclude Include="Math\Wm3Circle2.inl" />
+    <ClInclude Include="Math\Wm3Circle3.h" />
+    <ClInclude Include="Math\Wm3Circle3.inl" />
+    <ClInclude Include="Math\Wm3ColorRGB.h" />
+    <ClInclude Include="Math\Wm3ColorRGB.inl" />
+    <ClInclude Include="Math\Wm3ColorRGBA.h" />
+    <ClInclude Include="Math\Wm3ColorRGBA.inl" />
+    <ClInclude Include="Math\Wm3Cone3.h" />
+    <ClInclude Include="Math\Wm3Cone3.inl" />
+    <ClInclude Include="Math\Wm3Cylinder3.h" />
+    <ClInclude Include="Math\Wm3Cylinder3.inl" />
+    <ClInclude Include="Math\Wm3Ellipse2.h" />
+    <ClInclude Include="Math\Wm3Ellipse2.inl" />
+    <ClInclude Include="Math\Wm3Ellipsoid3.h" />
+    <ClInclude Include="Math\Wm3Ellipsoid3.inl" />
+    <ClInclude Include="Math\Wm3Frustum3.h" />
+    <ClInclude Include="Math\Wm3Frustum3.inl" />
+    <ClInclude Include="Math\Wm3GMatrix.h" />
+    <ClInclude Include="Math\Wm3GMatrix.inl" />
+    <ClInclude Include="Math\Wm3GVector.h" />
+    <ClInclude Include="Math\Wm3GVector.inl" />
+    <ClInclude Include="Math\Wm3LinComp.h" />
+    <ClInclude Include="Math\Wm3LinComp.inl" />
+    <ClInclude Include="Math\Wm3LinComp2.h" />
+    <ClInclude Include="Math\Wm3LinComp2.inl" />
+    <ClInclude Include="Math\Wm3LinComp3.h" />
+    <ClInclude Include="Math\Wm3LinComp3.inl" />
+    <ClInclude Include="Math\Wm3Line2.h" />
+    <ClInclude Include="Math\Wm3Line2.inl" />
+    <ClInclude Include="Math\Wm3Line3.h" />
+    <ClInclude Include="Math\Wm3Line3.inl" />
+    <ClInclude Include="Math\Wm3Lozenge3.h" />
+    <ClInclude Include="Math\Wm3Lozenge3.inl" />
+    <ClInclude Include="Math\Wm3Math.h" />
+    <ClInclude Include="Math\Wm3Math.inl" />
+    <ClInclude Include="Math\Wm3Matrix2.h" />
+    <ClInclude Include="Math\Wm3Matrix2.inl" />
+    <ClInclude Include="Math\Wm3Matrix3.h" />
+    <ClInclude Include="Math\Wm3Matrix3.inl" />
+    <ClInclude Include="Math\Wm3Matrix4.h" />
+    <ClInclude Include="Math\Wm3Matrix4.inl" />
+    <ClInclude Include="Math\Wm3Plane3.h" />
+    <ClInclude Include="Math\Wm3Plane3.inl" />
+    <ClInclude Include="Math\Wm3Polynomial1.h" />
+    <ClInclude Include="Math\Wm3Polynomial1.inl" />
+    <ClInclude Include="Math\Wm3Quaternion.h" />
+    <ClInclude Include="Math\Wm3Quaternion.inl" />
+    <ClInclude Include="Math\Wm3Ray2.h" />
+    <ClInclude Include="Math\Wm3Ray2.inl" />
+    <ClInclude Include="Math\Wm3Ray3.h" />
+    <ClInclude Include="Math\Wm3Ray3.inl" />
+    <ClInclude Include="Math\Wm3Rectangle3.h" />
+    <ClInclude Include="Math\Wm3Rectangle3.inl" />
+    <ClInclude Include="Math\Wm3Segment2.h" />
+    <ClInclude Include="Math\Wm3Segment2.inl" />
+    <ClInclude Include="Math\Wm3Segment3.h" />
+    <ClInclude Include="Math\Wm3Segment3.inl" />
+    <ClInclude Include="Math\Wm3Sphere3.h" />
+    <ClInclude Include="Math\Wm3Sphere3.inl" />
+    <ClInclude Include="Math\Wm3Tetrahedron3.h" />
+    <ClInclude Include="Math\Wm3Tetrahedron3.inl" />
+    <ClInclude Include="Math\Wm3Torus3.h" />
+    <ClInclude Include="Math\Wm3Torus3.inl" />
+    <ClInclude Include="Math\Wm3Triangle2.h" />
+    <ClInclude Include="Math\Wm3Triangle2.inl" />
+    <ClInclude Include="Math\Wm3Triangle3.h" />
+    <ClInclude Include="Math\Wm3Triangle3.inl" />
+    <ClInclude Include="Math\Wm3Vector2.h" />
+    <ClInclude Include="Math\Wm3Vector2.inl" />
+    <ClInclude Include="Math\Wm3Vector3.h" />
+    <ClInclude Include="Math\Wm3Vector3.inl" />
+    <ClInclude Include="Math\Wm3Vector4.h" />
+    <ClInclude Include="Math\Wm3Vector4.inl" />
+    <ClInclude Include="Meshes\Wm3BasicMesh.h" />
+    <ClInclude Include="Meshes\Wm3BasicMesh.inl" />
+    <ClInclude Include="Meshes\Wm3ConformalMap.h" />
+    <ClInclude Include="Meshes\Wm3EdgeKey.h" />
+    <ClInclude Include="Meshes\Wm3EdgeKey.inl" />
+    <ClInclude Include="Meshes\Wm3ETManifoldMesh.h" />
+    <ClInclude Include="Meshes\Wm3ETManifoldMesh.inl" />
+    <ClInclude Include="Meshes\Wm3ETNonmanifoldMesh.h" />
+    <ClInclude Include="Meshes\Wm3ETNonmanifoldMesh.inl" />
+    <ClInclude Include="Meshes\Wm3MeshCurvature.h" />
+    <ClInclude Include="Meshes\Wm3MeshSmoother.h" />
+    <ClInclude Include="Meshes\Wm3TriangleKey.h" />
+    <ClInclude Include="Meshes\Wm3TriangleKey.inl" />
+    <ClInclude Include="Miscellaneous\Wm3NormalCompression.h" />
+    <ClInclude Include="Miscellaneous\Wm3PerspProjEllipsoid.h" />
+    <ClInclude Include="Miscellaneous\Wm3QuadToQuadTransforms.h" />
+    <ClInclude Include="Miscellaneous\Wm3RandomHypersphere.h" />
+    <ClInclude Include="Numerics\Wm3Bisect1.h" />
+    <ClInclude Include="Numerics\Wm3Bisect2.h" />
+    <ClInclude Include="Numerics\Wm3Bisect3.h" />
+    <ClInclude Include="Numerics\Wm3Eigen.h" />
+    <ClInclude Include="Numerics\Wm3Integrate1.h" />
+    <ClInclude Include="Numerics\Wm3LinearSystem.h" />
+    <ClInclude Include="Numerics\Wm3Minimize1.h" />
+    <ClInclude Include="Numerics\Wm3MinimizeN.h" />
+    <ClInclude Include="Numerics\Wm3OdeEuler.h" />
+    <ClInclude Include="Numerics\Wm3OdeImplicitEuler.h" />
+    <ClInclude Include="Numerics\Wm3OdeMidpoint.h" />
+    <ClInclude Include="Numerics\Wm3OdeRungeKutta4.h" />
+    <ClInclude Include="Numerics\Wm3OdeSolver.h" />
+    <ClInclude Include="Numerics\Wm3PolynomialRoots.h" />
+    <ClInclude Include="ObjectSystem\Wm3ImageVersion.h" />
+    <ClInclude Include="ObjectSystem\Wm3Main.h" />
+    <ClInclude Include="ObjectSystem\Wm3Object.h" />
+    <ClInclude Include="ObjectSystem\Wm3Object.inl" />
+    <ClInclude Include="ObjectSystem\Wm3Rtti.h" />
+    <ClInclude Include="ObjectSystem\Wm3Rtti.inl" />
+    <ClInclude Include="ObjectSystem\Wm3SmartPointer.h" />
+    <ClInclude Include="ObjectSystem\Wm3SmartPointer.inl" />
+    <ClInclude Include="ObjectSystem\Wm3Stream.h" />
+    <ClInclude Include="ObjectSystem\Wm3Stream.inl" />
+    <ClInclude Include="ObjectSystem\Wm3StreamVersion.h" />
+    <ClInclude Include="ObjectSystem\Wm3StringTree.h" />
+    <ClInclude Include="ObjectSystem\Wm3StringTree.inl" />
+    <ClInclude Include="Physics\Wm3BoxSurface.h" />
+    <ClInclude Include="Physics\Wm3BoxSurface.inl" />
+    <ClInclude Include="Physics\Wm3BSplineVolume.h" />
+    <ClInclude Include="Physics\Wm3IntersectingBoxes.h" />
+    <ClInclude Include="Physics\Wm3IntersectingIntervals.h" />
+    <ClInclude Include="Physics\Wm3IntersectingRectangles.h" />
+    <ClInclude Include="Physics\Wm3LCPPolyDist.h" />
+    <ClInclude Include="Physics\Wm3LCPSolver.h" />
+    <ClInclude Include="Physics\Wm3MassSpringArbitrary.h" />
+    <ClInclude Include="Physics\Wm3MassSpringCurve.h" />
+    <ClInclude Include="Physics\Wm3MassSpringSurface.h" />
+    <ClInclude Include="Physics\Wm3MassSpringVolume.h" />
+    <ClInclude Include="Physics\Wm3ParticleSystem.h" />
+    <ClInclude Include="Physics\Wm3PolyhedralMassProperties.h" />
+    <ClInclude Include="Physics\Wm3RectangleSurface.h" />
+    <ClInclude Include="Physics\Wm3RectangleSurface.inl" />
+    <ClInclude Include="Physics\Wm3RevolutionSurface.h" />
+    <ClInclude Include="Physics\Wm3RevolutionSurface.inl" />
+    <ClInclude Include="Physics\Wm3RigidBody.h" />
+    <ClInclude Include="Physics\Wm3TubeSurface.h" />
+    <ClInclude Include="Physics\Wm3TubeSurface.inl" />
+    <ClInclude Include="RationalArithmetic\Wm3RVector2.h" />
+    <ClInclude Include="RationalArithmetic\Wm3RVector2.inl" />
+    <ClInclude Include="RationalArithmetic\Wm3RVector3.h" />
+    <ClInclude Include="RationalArithmetic\Wm3RVector3.inl" />
+    <ClInclude Include="RationalArithmetic\Wm3TInteger.h" />
+    <ClInclude Include="RationalArithmetic\Wm3TInteger.inl" />
+    <ClInclude Include="RationalArithmetic\Wm3TRational.h" />
+    <ClInclude Include="RationalArithmetic\Wm3TRational.inl" />
+    <ClInclude Include="RationalArithmetic\Wm3TRVector.h" />
+    <ClInclude Include="RationalArithmetic\Wm3TRVector.inl" />
+    <ClInclude Include="SceneGraph\Wm3AlphaState.h" />
+    <ClInclude Include="SceneGraph\Wm3BindInfo.h" />
+    <ClInclude Include="SceneGraph\Wm3BoundingVolume.h" />
+    <ClInclude Include="SceneGraph\Wm3BoxBV.h" />
+    <ClInclude Include="SceneGraph\Wm3BoxBV.inl" />
+    <ClInclude Include="SceneGraph\Wm3Camera.h" />
+    <ClInclude Include="SceneGraph\Wm3Camera.inl" />
+    <ClInclude Include="SceneGraph\Wm3CullState.h" />
+    <ClInclude Include="SceneGraph\Wm3DitherState.h" />
+    <ClInclude Include="SceneGraph\Wm3FogState.h" />
+    <ClInclude Include="SceneGraph\Wm3Geometry.h" />
+    <ClInclude Include="SceneGraph\Wm3Geometry.inl" />
+    <ClInclude Include="SceneGraph\Wm3GlobalState.h" />
+    <ClInclude Include="SceneGraph\Wm3Image.h" />
+    <ClInclude Include="SceneGraph\Wm3Image.inl" />
+    <ClInclude Include="SceneGraph\Wm3Light.h" />
+    <ClInclude Include="SceneGraph\Wm3Light.inl" />
+    <ClInclude Include="SceneGraph\Wm3MaterialState.h" />
+    <ClInclude Include="SceneGraph\Wm3Node.h" />
+    <ClInclude Include="SceneGraph\Wm3Node.inl" />
+    <ClInclude Include="SceneGraph\Wm3Particles.h" />
+    <ClInclude Include="SceneGraph\Wm3Particles.inl" />
+    <ClInclude Include="SceneGraph\Wm3Polyline.h" />
+    <ClInclude Include="SceneGraph\Wm3Polyline.inl" />
+    <ClInclude Include="SceneGraph\Wm3Polypoint.h" />
+    <ClInclude Include="SceneGraph\Wm3Polypoint.inl" />
+    <ClInclude Include="SceneGraph\Wm3Renderer.h" />
+    <ClInclude Include="SceneGraph\Wm3Renderer.inl" />
+    <ClInclude Include="SceneGraph\Wm3ScreenPolygon.h" />
+    <ClInclude Include="SceneGraph\Wm3ScreenPolygon.inl" />
+    <ClInclude Include="SceneGraph\Wm3ShadeState.h" />
+    <ClInclude Include="SceneGraph\Wm3Spatial.h" />
+    <ClInclude Include="SceneGraph\Wm3Spatial.inl" />
+    <ClInclude Include="SceneGraph\Wm3SphereBV.h" />
+    <ClInclude Include="SceneGraph\Wm3SphereBV.inl" />
+    <ClInclude Include="SceneGraph\Wm3StandardMesh.h" />
+    <ClInclude Include="SceneGraph\Wm3StandardMesh.inl" />
+    <ClInclude Include="SceneGraph\Wm3Texture.h" />
+    <ClInclude Include="SceneGraph\Wm3Texture.inl" />
+    <ClInclude Include="SceneGraph\Wm3Transformation.h" />
+    <ClInclude Include="SceneGraph\Wm3Transformation.inl" />
+    <ClInclude Include="SceneGraph\Wm3TriMesh.h" />
+    <ClInclude Include="SceneGraph\Wm3TriMesh.inl" />
+    <ClInclude Include="SceneGraph\Wm3WireframeState.h" />
+    <ClInclude Include="SceneGraph\Wm3ZBufferState.h" />
+    <ClInclude Include="Shaders\Wm3PixelShader.h" />
+    <ClInclude Include="Shaders\Wm3Shader.h" />
+    <ClInclude Include="Shaders\Wm3Shader.inl" />
+    <ClInclude Include="Shaders\Wm3ShaderConstant.h" />
+    <ClInclude Include="Shaders\Wm3ShaderConstant.inl" />
+    <ClInclude Include="Shaders\Wm3ShaderEffect.h" />
+    <ClInclude Include="Shaders\Wm3VertexShader.h" />
+    <ClInclude Include="SharedArrays\Wm3CachedColorRGBAArray.h" />
+    <ClInclude Include="SharedArrays\Wm3CachedColorRGBArray.h" />
+    <ClInclude Include="SharedArrays\Wm3CachedIntArray.h" />
+    <ClInclude Include="SharedArrays\Wm3CachedVector2fArray.h" />
+    <ClInclude Include="SharedArrays\Wm3CachedVector3fArray.h" />
+    <ClInclude Include="SharedArrays\Wm3ColorRGBAArray.h" />
+    <ClInclude Include="SharedArrays\Wm3ColorRGBArray.h" />
+    <ClInclude Include="SharedArrays\Wm3DoubleArray.h" />
+    <ClInclude Include="SharedArrays\Wm3FloatArray.h" />
+    <ClInclude Include="SharedArrays\Wm3IntArray.h" />
+    <ClInclude Include="SharedArrays\Wm3Matrix2Array.h" />
+    <ClInclude Include="SharedArrays\Wm3Matrix3Array.h" />
+    <ClInclude Include="SharedArrays\Wm3Matrix4Array.h" />
+    <ClInclude Include="SharedArrays\Wm3Plane3Array.h" />
+    <ClInclude Include="SharedArrays\Wm3QuaternionArray.h" />
+    <ClInclude Include="SharedArrays\Wm3TCachedArray.h" />
+    <ClInclude Include="SharedArrays\Wm3TCachedArray.inl" />
+    <ClInclude Include="SharedArrays\Wm3TSharedArray.h" />
+    <ClInclude Include="SharedArrays\Wm3TSharedArray.inl" />
+    <ClInclude Include="SharedArrays\Wm3Vector2Array.h" />
+    <ClInclude Include="SharedArrays\Wm3Vector3Array.h" />
+    <ClInclude Include="SharedArrays\Wm3Vector4Array.h" />
+    <ClInclude Include="Sorting\Wm3BspNode.h" />
+    <ClInclude Include="Sorting\Wm3BspNode.inl" />
+    <ClInclude Include="Sorting\Wm3ConvexRegion.h" />
+    <ClInclude Include="Sorting\Wm3ConvexRegion.inl" />
+    <ClInclude Include="Sorting\Wm3ConvexRegionManager.h" />
+    <ClInclude Include="Sorting\Wm3Portal.h" />
+    <ClInclude Include="Sorting\Wm3Portal.inl" />
+    <ClInclude Include="Surfaces\Wm3BSplineRectangle.h" />
+    <ClInclude Include="Surfaces\Wm3ImplicitSurface.h" />
+    <ClInclude Include="Surfaces\Wm3NURBSRectangle.h" />
+    <ClInclude Include="Surfaces\Wm3ParametricSurface.h" />
+    <ClInclude Include="Surfaces\Wm3QuadricSurface.h" />
+    <ClInclude Include="Surfaces\Wm3Surface.h" />
+    <ClInclude Include="Surfaces\Wm3SurfaceMesh.h" />
+    <ClInclude Include="Surfaces\Wm3SurfaceMesh.inl" />
+    <ClInclude Include="Surfaces\Wm3SurfacePatch.h" />
+    <ClInclude Include="Surfaces\Wm3SurfacePatch.inl" />
+    <ClInclude Include="System\Wm3Platforms.h" />
+    <ClInclude Include="System\Wm3String.h" />
+    <ClInclude Include="System\Wm3String.inl" />
+    <ClInclude Include="System\Wm3System.h" />
+    <ClInclude Include="System\Wm3System.inl" />
+    <ClInclude Include="System\Wm3TArray.h" />
+    <ClInclude Include="System\Wm3TArray.inl" />
+    <ClInclude Include="System\Wm3THashSet.h" />
+    <ClInclude Include="System\Wm3THashSet.inl" />
+    <ClInclude Include="System\Wm3THashTable.h" />
+    <ClInclude Include="System\Wm3THashTable.inl" />
+    <ClInclude Include="System\Wm3TList.h" />
+    <ClInclude Include="System\Wm3TList.inl" />
+    <ClInclude Include="System\Wm3TSet.h" />
+    <ClInclude Include="System\Wm3TSet.inl" />
+    <ClInclude Include="System\Wm3TStack.h" />
+    <ClInclude Include="System\Wm3TStack.inl" />
+    <ClInclude Include="Terrain\Wm3ClodTerrain.h" />
+    <ClInclude Include="Terrain\Wm3ClodTerrain.inl" />
+    <ClInclude Include="Terrain\Wm3ClodTerrainBlock.h" />
+    <ClInclude Include="Terrain\Wm3ClodTerrainBlock.inl" />
+    <ClInclude Include="Terrain\Wm3ClodTerrainPage.h" />
+    <ClInclude Include="Terrain\Wm3ClodTerrainPage.inl" />
+    <ClInclude Include="Terrain\Wm3ClodTerrainVertex.h" />
+    <ClInclude Include="Terrain\Wm3ClodTerrainVertex.inl" />
+    <ClInclude Include="Terrain\Wm3Terrain.h" />
+    <ClInclude Include="Terrain\Wm3Terrain.inl" />
+    <ClInclude Include="Terrain\Wm3TerrainPage.h" />
+    <ClInclude Include="Terrain\Wm3TerrainPage.inl" />
+    <ClInclude Include="Tessellation\Wm3Delaunay2.h" />
+    <ClInclude Include="Tessellation\Wm3Delaunay3.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

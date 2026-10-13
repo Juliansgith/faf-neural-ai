@@ -1,0 +1,37 @@
+From 00a03c65afaf5be5cc8ae1a4d9612347febc8f4a Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 15:12:40 +0200
+Subject: [PATCH 10/56] Read FormPlatoon's size multiplier from its third
+ argument
+
+cfunc_CPlatoonFormPlatoonL read the multiplier from squadSpec[5] -- the
+squad's formation string -- instead of Lua argument 3
+(`FormPlatoon(template, multiplier, [position, radius])`), as
+CanFormPlatoon does. Every AI platoon formation raised "get as number
+expected but got string" and no platoon formed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit f69075e63a3ac28aa2f6f02efad0edbc497bede2)
+---
+ src/sdk/moho/sim/CPlatoon.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/sdk/moho/sim/CPlatoon.cpp b/src/sdk/moho/sim/CPlatoon.cpp
+index 45de31bb..1b2fb294 100644
+--- a/src/sdk/moho/sim/CPlatoon.cpp
++++ b/src/sdk/moho/sim/CPlatoon.cpp
+@@ -3619,7 +3619,10 @@ namespace moho
+       const LuaPlus::LuaObject baseCountObject = squadSpec[3];
+       const int baseCount = baseCountObject.GetInteger();
+ 
+-      const LuaPlus::LuaObject multiplierObject = squadSpec[5];
++      // The size multiplier is Lua argument 3 (`FormPlatoon(template, multiplier, [position, radius])`),
++      // as in CanFormPlatoon. It was read from squadSpec[5] -- the squad's formation string -- so every
++      // AI platoon formation raised "get as number expected but got string".
++      const LuaPlus::LuaObject multiplierObject(LuaPlus::LuaStackObject(state, 3));
+       const float scaledSize = static_cast<float>(multiplierObject.GetNumber()) * static_cast<float>(baseCount);
+       const int requiredSize = static_cast<int>(std::floor(scaledSize));
+ 
+-- 
+2.55.0.windows.3
+

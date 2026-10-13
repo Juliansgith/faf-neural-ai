@@ -1,0 +1,506 @@
+From 446a75458fc3ad2a608582ddeee43c8570100a3f Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 15:12:40 +0200
+Subject: [PATCH 08/56] Port FAF engine functions that FAF's Lua calls
+
+FAF's Lua (game version 3839) calls engine functions that FA-Binary-Patches
+adds. Missing, they raised "attempt to call" errors:
+
+- SetCommandSource / SetFocusArmy in the sim lane: the recovered bodies
+  existed but were never registered there (victory conditions and
+  abandoned-army handling call them).
+- GetDepositsAroundPoint in the sim and user lanes, with FAF's field names
+  (X1, Z1, X2, Z2, Type, Dist).
+- SetNavigatorPersonalPosMaxDistance: FAF's hook at 0x005AF8D5 turns
+  CAiPathNavigator's fixed 50.0 string-pull limit into a variable.
+- Projectile:GetMaxZigZag, GetZigZagFrequency, GetCurrentTargetPositionXYZ
+  and SetNewTargetGroundXYZ.
+- Unit:ForceAltFootprint, which sets the second alt-footprint flag
+  Entity::GetFootprint already honours.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 0bdb1efc4c2f6535bd7b08af627dbc92f3e953a8)
+---
+ src/sdk/moho/ai/CAiPathNavigator.cpp          |   7 +-
+ src/sdk/moho/ai/CAiPathNavigator.h            |   7 +
+ .../ProjectileStartupRegistrations.cpp        | 108 ++++++++++++++
+ src/sdk/moho/sim/Sim.cpp                      | 138 +++++++++++++++++-
+ src/sdk/moho/sim/Sim.h                        |  41 ++++++
+ src/sdk/moho/unit/core/Unit.cpp               |  39 +++++
+ 6 files changed, 332 insertions(+), 8 deletions(-)
+
+diff --git a/src/sdk/moho/ai/CAiPathNavigator.cpp b/src/sdk/moho/ai/CAiPathNavigator.cpp
+index 230f6195..0741027c 100644
+--- a/src/sdk/moho/ai/CAiPathNavigator.cpp
++++ b/src/sdk/moho/ai/CAiPathNavigator.cpp
+@@ -24,6 +24,9 @@
+ 
+ using namespace moho;
+ 
++// Engine addition (see CAiPathNavigator.h): the binary's fixed 50.0 unless Lua changes it.
++float moho::gNavPersonalPosMaxDistance = 50.0f;
++
+ namespace
+ {
+   constexpr std::uint64_t kUnitPathFlag = 0x1000000ull;
+@@ -1395,7 +1398,9 @@ bool CAiPathNavigator::TryAdvanceTargetPoint()
+   std::int32_t selectedIndex = -1;
+   for (std::int32_t idx = furthestCandidateIndex; idx >= firstReachableIndex; --idx) {
+     const SOCellPos candidate = mPath.start[idx];
+-    if (idx != firstReachableIndex && CellDistance(mCurrentPos, candidate) >= 50.0f) {
++    // FAF parity: the hook at 0x005AF8D5 loads `navPersonalPosMaxDistance` here instead of the
++    // binary's fixed 50.0 (set from Lua by SetNavigatorPersonalPosMaxDistance; FAF uses 9999).
++    if (idx != firstReachableIndex && CellDistance(mCurrentPos, candidate) >= gNavPersonalPosMaxDistance) {
+       continue;
+     }
+ 
+diff --git a/src/sdk/moho/ai/CAiPathNavigator.h b/src/sdk/moho/ai/CAiPathNavigator.h
+index b3d5844b..c68683b2 100644
+--- a/src/sdk/moho/ai/CAiPathNavigator.h
++++ b/src/sdk/moho/ai/CAiPathNavigator.h
+@@ -12,6 +12,13 @@
+ 
+ namespace moho
+ {
++  /**
++   * Engine addition (FAF parity, FA-Binary-Patches section/PathfindingTweaks.cpp): the distance
++   * limit `CAiPathNavigator::TryAdvanceTargetPoint` applies to string-pull candidates, the binary's
++   * fixed 50.0 made settable from Lua through `SetNavigatorPersonalPosMaxDistance`.
++   */
++  extern float gNavPersonalPosMaxDistance;
++
+   class CAiPathFinder;
+   class Sim;
+   class Unit;
+diff --git a/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp b/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
+index 1005b5ce..3d36445a 100644
+--- a/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
++++ b/src/sdk/moho/projectile/ProjectileStartupRegistrations.cpp
+@@ -880,6 +880,110 @@ namespace moho
+     return &binder;
+   }
+ 
++  // ---------------------------------------------------------------------------------------------
++  // Engine additions: FAF's projectile methods (FA-Binary-Patches section/ProjectileNewMethods.cpp).
++  // `lua/sim/Projectile.lua` calls GetCurrentTargetPositionXYZ / SetNewTargetGroundXYZ unguarded.
++  // ---------------------------------------------------------------------------------------------
++
++  /** `zigzag = Projectile:GetMaxZigZag()` -- FAF reads the float at +0x36C (mAttributes.mMaxZigZag). */
++  int cfunc_ProjectileGetMaxZigZag(lua_State* const luaContext)
++  {
++    LuaPlus::LuaState* const state = ResolveBindingState(luaContext);
++    LuaPlus::LuaObject projectileObject(LuaPlus::LuaStackObject(state, 1));
++    Projectile* const projectile = SCR_FromLua_Projectile(projectileObject, state);
++    lua_pushnumber(state->m_state, projectile->mAttributes.mMaxZigZag);
++    return 1;
++  }
++
++  /** `frequency = Projectile:GetZigZagFrequency()` -- FAF reads +0x370 (mAttributes.mZigZagFrequency). */
++  int cfunc_ProjectileGetZigZagFrequency(lua_State* const luaContext)
++  {
++    LuaPlus::LuaState* const state = ResolveBindingState(luaContext);
++    LuaPlus::LuaObject projectileObject(LuaPlus::LuaStackObject(state, 1));
++    Projectile* const projectile = SCR_FromLua_Projectile(projectileObject, state);
++    lua_pushnumber(state->m_state, projectile->mAttributes.mZigZagFrequency);
++    return 1;
++  }
++
++  /**
++   * `x, y, z = Projectile:GetCurrentTargetPositionXYZ()` -- as GetCurrentTargetPosition, without the
++   * table: FAF calls 0x005E2A90 (CAiTarget::GetTargetPosGun, useActualPos = false) when a target is set.
++   */
++  int cfunc_ProjectileGetCurrentTargetPositionXYZ(lua_State* const luaContext)
++  {
++    LuaPlus::LuaState* const state = ResolveBindingState(luaContext);
++    LuaPlus::LuaObject projectileObject(LuaPlus::LuaStackObject(state, 1));
++    Projectile* const projectile = SCR_FromLua_Projectile(projectileObject, state);
++
++    Wm3::Vector3f targetPosition(0.0f, 0.0f, 0.0f);
++    if (projectile->mTargetPosData.targetType != EAiTargetType::AITARGET_None) {
++      targetPosition = projectile->mTargetPosData.GetTargetPosGun(false);
++    }
++    lua_pushnumber(state->m_state, targetPosition.x);
++    lua_pushnumber(state->m_state, targetPosition.y);
++    lua_pushnumber(state->m_state, targetPosition.z);
++    return 3;
++  }
++
++  /**
++   * `Projectile:SetNewTargetGroundXYZ(x, y, z)` -- FAF builds a ground target (type 2, no entity,
++   * target point -1, not mobile) and assigns it through 0x005D5670 (CAiTarget copy-assign).
++   */
++  int cfunc_ProjectileSetNewTargetGroundXYZ(lua_State* const luaContext)
++  {
++    LuaPlus::LuaState* const state = ResolveBindingState(luaContext);
++    lua_State* const rawState = state->m_state;
++    const int argumentCount = lua_gettop(rawState);
++    if (argumentCount != 4) {
++      LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, "Projectile:SetNewTargetGroundXYZ(x, y, z)", 4, argumentCount);
++    }
++    LuaPlus::LuaObject projectileObject(LuaPlus::LuaStackObject(state, 1));
++    Projectile* const projectile = SCR_FromLua_Projectile(projectileObject, state);
++
++    CAiTarget target{};
++    target.targetType = EAiTargetType::AITARGET_Ground;
++    target.targetEntity.ClearLinkState();
++    target.position = Wm3::Vector3f(
++      static_cast<float>(lua_tonumber(rawState, 2)),
++      static_cast<float>(lua_tonumber(rawState, 3)),
++      static_cast<float>(lua_tonumber(rawState, 4))
++    );
++    target.targetPoint = -1;
++    target.targetIsMobile = false;
++    projectile->mTargetPosData = target;
++    return 0;
++  }
++
++  CScrLuaInitForm* func_ProjectileGetMaxZigZag_LuaFuncDef()
++  {
++    static CScrLuaBinder binder(SimLuaInitSet(), "GetMaxZigZag", &moho::cfunc_ProjectileGetMaxZigZag,
++      &CScrLuaMetatableFactory<Projectile>::Instance(), "Projectile", "zigzag = Projectile:GetMaxZigZag()");
++    return &binder;
++  }
++
++  CScrLuaInitForm* func_ProjectileGetZigZagFrequency_LuaFuncDef()
++  {
++    static CScrLuaBinder binder(SimLuaInitSet(), "GetZigZagFrequency", &moho::cfunc_ProjectileGetZigZagFrequency,
++      &CScrLuaMetatableFactory<Projectile>::Instance(), "Projectile", "frequency = Projectile:GetZigZagFrequency()");
++    return &binder;
++  }
++
++  CScrLuaInitForm* func_ProjectileGetCurrentTargetPositionXYZ_LuaFuncDef()
++  {
++    static CScrLuaBinder binder(SimLuaInitSet(), "GetCurrentTargetPositionXYZ",
++      &moho::cfunc_ProjectileGetCurrentTargetPositionXYZ, &CScrLuaMetatableFactory<Projectile>::Instance(),
++      "Projectile", "x, y, z = Projectile:GetCurrentTargetPositionXYZ()");
++    return &binder;
++  }
++
++  CScrLuaInitForm* func_ProjectileSetNewTargetGroundXYZ_LuaFuncDef()
++  {
++    static CScrLuaBinder binder(SimLuaInitSet(), "SetNewTargetGroundXYZ",
++      &moho::cfunc_ProjectileSetNewTargetGroundXYZ, &CScrLuaMetatableFactory<Projectile>::Instance(),
++      "Projectile", "Projectile:SetNewTargetGroundXYZ(x, y, z)");
++    return &binder;
++  }
++
+   /**
+    * Address: 0x006A1820 (FUN_006A1820, cfunc_ProjectileSetNewTarget)
+    *
+@@ -2946,6 +3050,10 @@ namespace
+       (void)::moho::func_ProjectileGetLauncher_LuaFuncDef();
+       (void)::moho::func_ProjectileGetTrackingTarget_LuaFuncDef();
+       (void)::moho::func_ProjectileGetCurrentTargetPosition_LuaFuncDef();
++      (void)::moho::func_ProjectileGetMaxZigZag_LuaFuncDef();
++      (void)::moho::func_ProjectileGetZigZagFrequency_LuaFuncDef();
++      (void)::moho::func_ProjectileGetCurrentTargetPositionXYZ_LuaFuncDef();
++      (void)::moho::func_ProjectileSetNewTargetGroundXYZ_LuaFuncDef();
+       (void)::moho::func_ProjectileSetNewTarget_LuaFuncDef();
+       (void)::moho::func_ProjectileSetNewTargetGround_LuaFuncDef();
+       (void)::moho::func_ProjectileSetLifetime_LuaFuncDef();
+diff --git a/src/sdk/moho/sim/Sim.cpp b/src/sdk/moho/sim/Sim.cpp
+index 93a2a990..c0b7a20c 100644
+--- a/src/sdk/moho/sim/Sim.cpp
++++ b/src/sdk/moho/sim/Sim.cpp
+@@ -23555,11 +23555,35 @@ moho::CScrLuaInitForm* moho::func_CreateResourceDeposit_LuaFuncDef()
+  * Reads `(x, z, radius, type)` from Lua and returns an array of deposits:
+  * `{ x1, z1, x2, z2, type, dist }`.
+  */
++namespace
++{
++  int PushDepositsAroundPoint(lua_State* luaContext, moho::Sim* sim);
++} // namespace
++
+ int moho::cfunc_GetDepositsAroundPoint(lua_State* const luaContext)
+ {
+   if (!luaContext) {
+     return 0;
+   }
++  return PushDepositsAroundPoint(luaContext, ResolveGlobalSim(luaContext));
++}
++
++/**
++ * Engine addition (see Sim.h): user-lane `GetDepositsAroundPoint`, reading `Sim::sInstance`.
++ */
++int moho::cfunc_GetDepositsAroundPointUser(lua_State* const luaContext)
++{
++  if (!luaContext) {
++    return 0;
++  }
++  return PushDepositsAroundPoint(luaContext, Sim::sInstance);
++}
++
++namespace
++{
++int PushDepositsAroundPoint(lua_State* const luaContext, moho::Sim* const sim)
++{
++  using namespace moho;
+ 
+   const float x = static_cast<float>(lua_tonumber(luaContext, 1));
+   const float z = static_cast<float>(lua_tonumber(luaContext, 2));
+@@ -23573,7 +23597,6 @@ int moho::cfunc_GetDepositsAroundPoint(lua_State* const luaContext)
+ 
+   lua_newtable(luaContext);
+ 
+-  Sim* const sim = ResolveGlobalSim(luaContext);
+   CSimResources* const resources = sim ? sim->mSimResources.px : nullptr;
+   if (!resources) {
+     return 1;
+@@ -23588,17 +23611,19 @@ int moho::cfunc_GetDepositsAroundPoint(lua_State* const luaContext)
+ 
+     lua_pushnumber(luaContext, static_cast<lua_Number>(i + 1u));
+     lua_newtable(luaContext);
+-    LuaPushNumberField(luaContext, "x1", deposit.footprintRect.x0);
+-    LuaPushNumberField(luaContext, "z1", deposit.footprintRect.z0);
+-    LuaPushNumberField(luaContext, "x2", deposit.footprintRect.x1);
+-    LuaPushNumberField(luaContext, "z2", deposit.footprintRect.z1);
+-    LuaPushNumberField(luaContext, "type", static_cast<int>(deposit.depositType));
+-    LuaPushNumberField(luaContext, "dist", hit.centerDistance);
++    // Field names as FAF's patch publishes them (section/SimGetDepositsAroundPoint.cpp).
++    LuaPushNumberField(luaContext, "X1", deposit.footprintRect.x0);
++    LuaPushNumberField(luaContext, "Z1", deposit.footprintRect.z0);
++    LuaPushNumberField(luaContext, "X2", deposit.footprintRect.x1);
++    LuaPushNumberField(luaContext, "Z2", deposit.footprintRect.z1);
++    LuaPushNumberField(luaContext, "Type", static_cast<int>(deposit.depositType));
++    LuaPushNumberField(luaContext, "Dist", hit.centerDistance);
+     lua_settable(luaContext, -3);
+   }
+ 
+   return 1;
+ }
++} // namespace
+ 
+ /**
+  * Address: 0x0128CC35 (the sim-lane `SessionIsReplay` body; IDA's
+@@ -23720,6 +23745,99 @@ int moho::cfunc_SetCommandSourceSim(lua_State* const luaContext)
+   return 0;
+ }
+ 
++/**
++ * Engine addition (see Sim.h): sim-lane `SetCommandSource` binder.
++ */
++moho::CScrLuaInitForm* moho::func_SetCommandSourceSim_LuaFuncDef()
++{
++  static CScrLuaBinder binder(
++    SimLuaInitSet(),
++    "SetCommandSource",
++    &moho::cfunc_SetCommandSourceSim,
++    nullptr,
++    "<global>",
++    "(targetArmyIndex, sourceHumanIndex, Set or Unset)"
++  );
++  return &binder;
++}
++
++/**
++ * Engine addition (see Sim.h): sim-lane `SetFocusArmy` binder.
++ */
++moho::CScrLuaInitForm* moho::func_SetFocusArmySim_LuaFuncDef()
++{
++  static CScrLuaBinder binder(
++    SimLuaInitSet(),
++    "SetFocusArmy",
++    &moho::cfunc_SetFocusArmySim,
++    nullptr,
++    "<global>",
++    "SetFocusArmy(armyIndex)"
++  );
++  return &binder;
++}
++
++/**
++ * Engine addition (see Sim.h): sim-lane `GetDepositsAroundPoint` binder.
++ */
++moho::CScrLuaInitForm* moho::func_GetDepositsAroundPointSim_LuaFuncDef()
++{
++  static CScrLuaBinder binder(
++    SimLuaInitSet(),
++    "GetDepositsAroundPoint",
++    &moho::cfunc_GetDepositsAroundPoint,
++    nullptr,
++    "<global>",
++    "(X, Z, Radius, Type)"
++  );
++  return &binder;
++}
++
++/**
++ * Engine addition (see Sim.h): user-lane `GetDepositsAroundPoint` binder.
++ */
++moho::CScrLuaInitForm* moho::func_GetDepositsAroundPointUser_LuaFuncDef()
++{
++  static CScrLuaBinder binder(
++    UserLuaInitSet(),
++    "GetDepositsAroundPoint",
++    &moho::cfunc_GetDepositsAroundPointUser,
++    nullptr,
++    "<global>",
++    "(X, Z, Radius, Type)"
++  );
++  return &binder;
++}
++
++/**
++ * Engine addition (see Sim.h).
++ */
++int moho::cfunc_SetNavigatorPersonalPosMaxDistance(lua_State* const luaContext)
++{
++  if (!luaContext) {
++    return 0;
++  }
++  const bool hasValue = lua_gettop(luaContext) >= 1 && lua_isnumber(luaContext, 1) != 0;
++  gNavPersonalPosMaxDistance = hasValue ? static_cast<float>(lua_tonumber(luaContext, 1)) : 50.0f;
++  return 0;
++}
++
++/**
++ * Engine addition (see Sim.h): `SetNavigatorPersonalPosMaxDistance` binder.
++ */
++moho::CScrLuaInitForm* moho::func_SetNavigatorPersonalPosMaxDistance_LuaFuncDef()
++{
++  static CScrLuaBinder binder(
++    SimLuaInitSet(),
++    "SetNavigatorPersonalPosMaxDistance",
++    &moho::cfunc_SetNavigatorPersonalPosMaxDistance,
++    nullptr,
++    "<global>",
++    "SetNavigatorPersonalPosMaxDistance(distance = 50)"
++  );
++  return &binder;
++}
++
+ /**
+  * Address: 0x0074B110 (FUN_0074B110, ?SIM_FromLuaState@Moho@@YAPAVSim@1@PAVLuaState@LuaPlus@@@Z)
+  *
+@@ -27125,6 +27243,12 @@ namespace
+       (void)::moho::func_SessionGetLocalCommandSource_LuaFuncDef();
+       (void)::moho::func_SessionIsReplayUser_LuaFuncDef();
+       (void)::moho::func_SessionIsReplaySim_LuaFuncDef();
++      // FAF engine functions (engine additions, see Sim.h).
++      (void)::moho::func_SetCommandSourceSim_LuaFuncDef();
++      (void)::moho::func_SetFocusArmySim_LuaFuncDef();
++      (void)::moho::func_GetDepositsAroundPointSim_LuaFuncDef();
++      (void)::moho::func_GetDepositsAroundPointUser_LuaFuncDef();
++      (void)::moho::func_SetNavigatorPersonalPosMaxDistance_LuaFuncDef();
+       (void)::moho::func_SessionIsBeingRecorded_LuaFuncDef();
+       (void)::moho::func_SessionIsMultiplayer_LuaFuncDef();
+       (void)::moho::func_SessionIsObservingAllowed_LuaFuncDef();
+diff --git a/src/sdk/moho/sim/Sim.h b/src/sdk/moho/sim/Sim.h
+index cb200dbc..c96ad83e 100644
+--- a/src/sdk/moho/sim/Sim.h
++++ b/src/sdk/moho/sim/Sim.h
+@@ -6012,6 +6012,47 @@ namespace moho
+    */
+   int cfunc_SetCommandSourceSim(lua_State* luaContext);
+ 
++  /**
++   * Engine addition (FAF parity, FA-Binary-Patches section/SimSetCommandSource.cpp): publishes the
++   * sim-lane global `SetCommandSource(targetArmyIndex, sourceIndex, set)`. The body above was
++   * recovered from the `.exxt` section but never registered, so FAF's victory-condition and
++   * abandoned-army code raised "attempt to call global `SetCommandSource'".
++   */
++  CScrLuaInitForm* func_SetCommandSourceSim_LuaFuncDef();
++
++  /**
++   * Engine addition (FAF parity): publishes the sim-lane global `SetFocusArmy(index)` for the
++   * recovered `cfunc_SetFocusArmySim` body.
++   */
++  CScrLuaInitForm* func_SetFocusArmySim_LuaFuncDef();
++
++  /**
++   * Engine addition (FAF parity, section/SimGetDepositsAroundPoint.cpp): user-lane
++   * `GetDepositsAroundPoint`. The user Lua state carries no Sim pointer, so this reads
++   * `Sim::sInstance`, as FAF's `UIRegFunc` reads `g_Sim`. Deposits are static after map load.
++   */
++  int cfunc_GetDepositsAroundPointUser(lua_State* luaContext);
++
++  /** Engine addition (FAF parity): sim-lane `GetDepositsAroundPoint(x, z, radius, type)`. */
++  CScrLuaInitForm* func_GetDepositsAroundPointSim_LuaFuncDef();
++
++  /** Engine addition (FAF parity): user-lane `GetDepositsAroundPoint(x, z, radius, type)`. */
++  CScrLuaInitForm* func_GetDepositsAroundPointUser_LuaFuncDef();
++
++  /**
++   * Engine addition (FAF parity, section/PathfindingTweaks.cpp): stores
++   * `luaL_optnumber(1, 50)` into `gNavPersonalPosMaxDistance`, the value FAF's hook at 0x005AF8D5
++   * substitutes for the fixed 50.0 in `CAiPathNavigator::TryAdvanceTargetPoint`. FAF's
++   * `simInit.lua` sets 9999 so navigators use personal positioning for every move order.
++   */
++  int cfunc_SetNavigatorPersonalPosMaxDistance(lua_State* luaContext);
++
++  /** Defined in ai/CAiPathNavigator.cpp (engine addition; see there). */
++  extern float gNavPersonalPosMaxDistance;
++
++  /** Engine addition (FAF parity): publishes `SetNavigatorPersonalPosMaxDistance`. */
++  CScrLuaInitForm* func_SetNavigatorPersonalPosMaxDistance_LuaFuncDef();
++
+   /**
+    * Address: 0x005284D0 (FUN_005284D0, cfunc_SpecFootprints)
+    *
+diff --git a/src/sdk/moho/unit/core/Unit.cpp b/src/sdk/moho/unit/core/Unit.cpp
+index fef6390c..c3b21be5 100644
+--- a/src/sdk/moho/unit/core/Unit.cpp
++++ b/src/sdk/moho/unit/core/Unit.cpp
+@@ -676,6 +676,8 @@ namespace moho
+   int cfunc_UnitSetAutoMode(lua_State* luaContext);
+   CScrLuaInitForm* func_UnitSetAutoMode_LuaFuncDef();
+   int cfunc_UnitSetAutoModeL(LuaPlus::LuaState* state);
++  int cfunc_UnitForceAltFootprint(lua_State* luaContext);
++  CScrLuaInitForm* func_UnitForceAltFootprint_LuaFuncDef();
+   int cfunc_UnitAddBuildRestriction(lua_State* luaContext);
+   CScrLuaInitForm* func_UnitAddBuildRestriction_LuaFuncDef();
+   int cfunc_UnitAddBuildRestrictionL(LuaPlus::LuaState* state);
+@@ -8292,6 +8294,42 @@ int moho::cfunc_UnitSetAutoModeL(LuaPlus::LuaState* const state)
+   return 0;
+ }
+ 
++/**
++ * Engine addition (FAF parity, FA-Binary-Patches section/EntityGetFootprint.cpp):
++ * `Unit:ForceAltFootprint(bool)` sets the byte at SSTIEntityVariableData+0xA5, which
++ * `Entity::GetFootprint` already treats as a second "use the alt footprint" flag. The Cybran Salem
++ * destroyer script calls it when toggling between land and sea.
++ */
++int moho::cfunc_UnitForceAltFootprint(lua_State* const luaContext)
++{
++  LuaPlus::LuaState* const state = moho::SCR_ResolveBindingState(luaContext);
++  lua_State* const rawState = state->m_state;
++  const int argumentCount = lua_gettop(rawState);
++  if (argumentCount != 2) {
++    LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, "Unit:ForceAltFootprint(bool)", 2, argumentCount);
++  }
++  const LuaPlus::LuaObject unitObject(LuaPlus::LuaStackObject(state, 1));
++  Unit* const unit = SCR_FromLua_Unit(unitObject);
++  unit->mVarDat.mUsingAltFootprintSecondary = lua_toboolean(rawState, 2) != 0 ? 1u : 0u;
++  return 0;
++}
++
++/**
++ * Engine addition: publishes `Unit:ForceAltFootprint(bool)`.
++ */
++CScrLuaInitForm* moho::func_UnitForceAltFootprint_LuaFuncDef()
++{
++  static CScrLuaBinder binder(
++    SimLuaInitSet(),
++    "ForceAltFootprint",
++    &moho::cfunc_UnitForceAltFootprint,
++    &CScrLuaMetatableFactory<Unit>::Instance(),
++    kUnitLuaClassName,
++    "Unit:ForceAltFootprint(bool)"
++  );
++  return &binder;
++}
++
+ /**
+  * Address: 0x006C8120 (FUN_006C8120, cfunc_UnitAddBuildRestriction)
+  *
+@@ -17799,6 +17837,7 @@ namespace
+       (void)::moho::func_UnitSetFireState_LuaFuncDef();
+       (void)::moho::func_UnitGetFireState_LuaFuncDef();
+       (void)::moho::func_UnitSetAutoMode_LuaFuncDef();
++      (void)::moho::func_UnitForceAltFootprint_LuaFuncDef();
+       (void)::moho::func_UnitAddBuildRestriction_LuaFuncDef();
+       (void)::moho::func_UnitRemoveBuildRestriction_LuaFuncDef();
+       (void)::moho::func_UnitRestoreBuildRestrictions_LuaFuncDef();
+-- 
+2.55.0.windows.3
+

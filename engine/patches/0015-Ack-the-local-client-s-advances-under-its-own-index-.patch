@@ -1,0 +1,44 @@
+From 877d6255e979573c2e0f0e80e1d0ec0706efd6bf Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 16:32:31 +0200
+Subject: [PATCH 15/56] Ack the local client's advances under its own index in
+ CReplayClient
+
+CReplayClient::Process acknowledges each CMDST_Advance the local client's
+marshaller sends. The binary writes that ack under the local client's
+index -- mManager->GetLocalClient() (vtable +0x24), then its mIndex
+(+0x20), at 0x0053D9F0-0x0053D9FA -- while the recovery wrote the replay
+client's own index. The local client's ack slot in the replay client
+stayed at 0, so the manager never saw a beat become available (both
+clients queued, nothing dispatched) and every replay stalled at beat 0.
+
+(Start() acks the replay's own queued beats under this client's index,
+as the binary does at 0x0053D528; only the Process path differed.)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit cda6c65b9b59e0eb49031e3d2f43210063cfbead)
+---
+ src/sdk/moho/net/CReplayClient.cpp | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/sdk/moho/net/CReplayClient.cpp b/src/sdk/moho/net/CReplayClient.cpp
+index 698bf690..d977751b 100644
+--- a/src/sdk/moho/net/CReplayClient.cpp
++++ b/src/sdk/moho/net/CReplayClient.cpp
+@@ -154,7 +154,12 @@ void CReplayClient::Process(CMessage& msg)
+     CMessage ackMessage(EClientMsg::CLIMSG_Ack);
+     CMessageStream ackStream(ackMessage);
+ 
+-    const auto localClientIndex = static_cast<std::uint8_t>(mIndex);
++    // The Advance being processed came from the local client's marshaller, so the binary acks it
++    // under the *local* client's index: mManager->GetLocalClient() (vtable +0x24), then its mIndex
++    // (+0x20), at 0x0053D9F0-0x0053D9FA. Using this client's own index left the local client's
++    // ack slot at 0, so no beat ever became available and every replay stalled at beat 0.
++    IClient* const localClient = mManager->GetLocalClient();
++    const auto localClientIndex = static_cast<std::uint8_t>(localClient != nullptr ? localClient->GetIndex() : mIndex);
+     ackStream.Write(localClientIndex);
+ 
+     std::int32_t ackBeat = beatDelta;
+-- 
+2.55.0.windows.3
+

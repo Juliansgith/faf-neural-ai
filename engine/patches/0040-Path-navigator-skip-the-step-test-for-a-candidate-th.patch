@@ -1,0 +1,47 @@
+From 931ee7563cac703a58f6d5e192e3bb8f1fab5424 Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 22:14:25 +0200
+Subject: [PATCH 40/56] Path navigator: skip the step test for a candidate that
+ cannot be occupied
+
+TryAdvanceTargetPoint (0x005AF7E0) accepts a candidate path node only when
+both CanOccupyTargetCell and the step test (CanReachCellFromCurrent or
+CanPathCellTransition) hold. The binary evaluates the step test even when
+the occupancy test already failed; its result is then never used, and both
+step tests only read sim state (their grid gathers clear their marks
+again), so it is skipped.
+
+Verified with the same 30-minute all-AI checksum run as the previous change
+(identical over all 18002 beats).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 3c1b95e9fdddcd25aa6c4c9332e3b25c53dec6a1)
+---
+ src/sdk/moho/ai/CAiPathNavigator.cpp | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/sdk/moho/ai/CAiPathNavigator.cpp b/src/sdk/moho/ai/CAiPathNavigator.cpp
+index 0741027c..a3278f9c 100644
+--- a/src/sdk/moho/ai/CAiPathNavigator.cpp
++++ b/src/sdk/moho/ai/CAiPathNavigator.cpp
+@@ -1433,9 +1433,14 @@ bool CAiPathNavigator::TryAdvanceTargetPoint()
+     // `COGrid::UnitIsBlocked`. The recovered form ran both unconditionally and
+     // handed the short-step test `mCurrentPos` as its from-cell, which made it
+     // a second swept mobile-unit test rather than the endpoint test it is.
+-    const bool stepClear = (ManhattanDistance(mCurrentPos, candidate) > 1)
+-      ? CanReachCellFromCurrent(*this, candidate)
+-      : CanPathCellTransition(*this, candidate, candidate);
++    //
++    // The binary runs the step test even when `canOccupy` already failed; its
++    // result is then never used, and both step tests only read sim state (the
++    // grid gathers they make clear their marks again), so it is skipped here.
++    const bool stepClear = canOccupy &&
++      ((ManhattanDistance(mCurrentPos, candidate) > 1)
++         ? CanReachCellFromCurrent(*this, candidate)
++         : CanPathCellTransition(*this, candidate, candidate));
+ 
+     if (canOccupy && stepClear) {
+       mHasForwardProbe = 1;
+-- 
+2.55.0.windows.3
+

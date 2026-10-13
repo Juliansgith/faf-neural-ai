@@ -1,0 +1,117 @@
+From ced2c2c45c0c8c603b5af2b38c6218403d23e13e Mon Sep 17 00:00:00 2001
+From: Julian Cooper <115541810+Juliansgith@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 15:12:39 +0200
+Subject: [PATCH 05/56] Use the real RPropBlueprint Defense/Economy type infos
+
+RPropBlueprintTypeInfo.cpp carried fieldless same-named copies of
+RPropBlueprintDefenseTypeInfo and RPropBlueprintEconomyTypeInfo and
+pre-registered them: an ODR violation that registered each typeid twice,
+possibly without its fields. Use the real classes from their own files.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit ac151d2c3119d7477df2e103a034529a0d98e0aa)
+---
+ .../blueprints/RPropBlueprintTypeInfo.cpp     | 69 +++----------------
+ 1 file changed, 8 insertions(+), 61 deletions(-)
+
+diff --git a/src/sdk/moho/resource/blueprints/RPropBlueprintTypeInfo.cpp b/src/sdk/moho/resource/blueprints/RPropBlueprintTypeInfo.cpp
+index 0e173230..f745a84d 100644
+--- a/src/sdk/moho/resource/blueprints/RPropBlueprintTypeInfo.cpp
++++ b/src/sdk/moho/resource/blueprints/RPropBlueprintTypeInfo.cpp
+@@ -6,6 +6,8 @@
+ 
+ #include "moho/entity/REntityBlueprint.h"
+ #include "moho/resource/blueprints/RPropBlueprint.h"
++#include "moho/resource/blueprints/RPropBlueprintDefenseTypeInfo.h"
++#include "moho/resource/blueprints/RPropBlueprintEconomyTypeInfo.h"
+ 
+ #include "gpg/core/reflection/StaticInitPhase.h"
+ 
+@@ -44,63 +46,10 @@ namespace
+ 
+ namespace moho
+ {
+-  class RPropBlueprintDefenseTypeInfo final : public gpg::RType
+-  {
+-  public:
+-    [[nodiscard]] const char* GetName() const override
+-    {
+-      return "RPropBlueprintDefense";
+-    }
+-
+-    void Init() override
+-    {
+-      size_ = sizeof(RPropBlueprintDefense);
+-      gpg::RType::Init();
+-      Finish();
+-    }
+-  };
+-
+-  class RPropBlueprintEconomyTypeInfo final : public gpg::RType
+-  {
+-  public:
+-    [[nodiscard]] const char* GetName() const override
+-    {
+-      return "RPropBlueprintEconomy";
+-    }
+-
+-    void Init() override
+-    {
+-      size_ = sizeof(RPropBlueprintEconomy);
+-      gpg::RType::Init();
+-      Finish();
+-    }
+-  };
+-
+-  /**
+-   * Address: 0x0051D5F0 (FUN_0051D5F0, preregister_RPropBlueprintDefenseTypeInfo)
+-   *
+-   * What it does:
+-   * Constructs/preregisters reflection metadata for `RPropBlueprintDefense`.
+-   */
+-  [[nodiscard]] gpg::RType* preregister_RPropBlueprintDefenseTypeInfo()
+-  {
+-    static RPropBlueprintDefenseTypeInfo typeInfo;
+-    gpg::PreRegisterRType(typeid(RPropBlueprintDefense), &typeInfo);
+-    return &typeInfo;
+-  }
+-
+-  /**
+-   * Address: 0x0051D7A0 (FUN_0051D7A0, preregister_RPropBlueprintEconomyTypeInfo)
+-   *
+-   * What it does:
+-   * Constructs/preregisters reflection metadata for `RPropBlueprintEconomy`.
+-   */
+-  [[nodiscard]] gpg::RType* preregister_RPropBlueprintEconomyTypeInfo()
+-  {
+-    static RPropBlueprintEconomyTypeInfo typeInfo;
+-    gpg::PreRegisterRType(typeid(RPropBlueprintEconomy), &typeInfo);
+-    return &typeInfo;
+-  }
++  // RPropBlueprintDefenseTypeInfo / RPropBlueprintEconomyTypeInfo are defined, with their fields, and
++  // pre-registered once each, in RPropBlueprintDefenseTypeInfo.cpp / RPropBlueprintEconomyTypeInfo.cpp.
++  // This file used to carry fieldless same-named copies (an ODR violation that registered the same
++  // typeid twice).
+ 
+   /**
+    * Address: 0x0051D950 (FUN_0051D950, Moho::RPropBlueprintTypeInfo::RPropBlueprintTypeInfo)
+@@ -168,8 +117,8 @@ namespace moho
+    */
+   void register_RPropBlueprintTypeInfo()
+   {
+-    (void)preregister_RPropBlueprintDefenseTypeInfo();
+-    (void)preregister_RPropBlueprintEconomyTypeInfo();
++    register_RPropBlueprintDefenseTypeInfo();
++    register_RPropBlueprintEconomyTypeInfo();
+     (void)AcquireRPropBlueprintTypeInfo();
+   }
+ } // namespace moho
+@@ -178,5 +127,3 @@ namespace moho
+ // every consumer that calls gpg::LookupRType. See StaticInitPhase.h.
+ GPG_PREREGISTER_INIT(register_RPropBlueprintTypeInfo_460a53, moho::register_RPropBlueprintTypeInfo)
+ 
+-GPG_PREREGISTER_INIT(preregister_RPropBlueprintDefenseTypeInfo_460a53, moho::preregister_RPropBlueprintDefenseTypeInfo)
+-GPG_PREREGISTER_INIT(preregister_RPropBlueprintEconomyTypeInfo_460a53, moho::preregister_RPropBlueprintEconomyTypeInfo)
+-- 
+2.55.0.windows.3
+
