@@ -1236,10 +1236,11 @@ def _mapped_arrays(path: Path, folder: Path, lazy: bool = False):
 
 class Games:
     def __init__(self, cache: Path | list, max_games: int | None = None, mapped: Path | None = None,
-                 newest: int | None = None, sources: set | None = None):
+                 newest: int | None = None, sources: set | None = None, rounds: set | None = None):
         """All current cached games in `cache` (a folder or several); with `mapped`, read from memory-mapped
         copies in that folder instead of loaded into RAM. `newest`: only the newest this many (by encoding time,
-        chosen from the cache index before anything is loaded)."""
+        chosen from the cache index before anything is loaded). `rounds`: only games recorded in these round
+        folders (a recording's source_root is <rounds>/<round>/raw), before `newest` is applied."""
         self.games = []
         semantics = _encoder_semantics_hash()
         current = []
@@ -1258,6 +1259,8 @@ class Games:
                 latest[source] = (path, manifest)
         if sources is not None:             # only these recordings: {(source_root, source_name)}
             latest = {k: v for k, v in latest.items() if k in sources}
+        if rounds is not None:
+            latest = {k: v for k, v in latest.items() if Path(str(k[0] or "")).parent.name in rounds}
         if newest is not None:
             # an RL cache keeps every game ever encoded (3655 on 2026-10-11, ~30 MB each once loaded): loading all
             # of them to train on the newest few hundred ran the PC out of memory

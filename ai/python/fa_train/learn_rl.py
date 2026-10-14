@@ -359,6 +359,8 @@ def main():
     ap.add_argument("--cache", action="append", required=True, help="encoded recorded games (with pol_* arrays)")
     ap.add_argument("--reference", type=Path, help="frozen KL anchor (default: --init)")
     ap.add_argument("--max-games", type=int, default=0, help="only the newest this many games (0: all)")
+    ap.add_argument("--rounds-file", type=Path,
+                    help="JSON list of round folder names: only games recorded in them (rl_loop: the lineage's)")
     ap.add_argument("--epochs", type=int, default=2)
     ap.add_argument("--streams", type=int, default=16, help="games side by side")
     ap.add_argument("--length", type=int, default=32, help="decisions per chunk")
@@ -460,7 +462,13 @@ def main():
     for p in ref.parameters():
         p.requires_grad_(False)
     # only the newest games are loaded (with a margin for games without recorded choices): the cache keeps them all
-    games = Games([Path(c) for c in a.cache], newest=a.max_games + 60 if a.max_games else None)
+    # only the lineage's rounds (rl_loop): the cache keeps every game encoded, and after a fallback the newest
+    # were the abandoned branch's -- every restart from rl_089 trained first on them (rl_102 on rl_096-098's
+    # games, rl_113 on the commander-reward networks', 2026-10-14) and went downhill
+    only = set(json.loads(a.rounds_file.read_text())) if a.rounds_file else None
+    games = Games([Path(c) for c in a.cache], newest=a.max_games + 60 if a.max_games else None, rounds=only)
+    if only is not None:
+        print(f"games: {len(games.games)} from the lineage's {len(only)} rounds", flush=True)
     games.units = True
     usable = [i for i, g in enumerate(games.games)
               if "pol_has" in g and bool(np.asarray(g["pol_has"]).any()) and all(f"rew_{c}" in g for c in REWARD_COMPONENTS)]

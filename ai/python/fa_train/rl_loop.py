@@ -186,6 +186,30 @@ def regression(rounds: Path, start: Path, ckpts: Path, points: float, min_games:
             f"{base_sum / g:.0%} on the same opponents"), fallback
 
 
+def collapsed(rounds: Path, start: Path, ckpts: Path, order: list, floor: float, min_games: int):
+    """The lineage's newest network with `min_games` games against the standard AIs on small maps (no M28, no
+    self-play, maps up to LARGE_KM) winning under `floor`: broken, not noise (a healthy network wins 75-90 % there;
+    under 40 % of 20 games is ~1e-5 for it). Returns None, or (what happened, the newest earlier lineage network
+    measured at or above the floor, or None when there is none). The regression guard pools networks and takes
+    ~140 games; 2026-10-14 rl_115 all but stopped building economy (mass income 18 against 40-60, 66 units
+    against ~185) and won 9 of 54 such games, pooled with its healthy neighbours it was not a trend."""
+    by_ai = win_rates_by_ai(rounds, _names(start, ckpts))
+    measured = []
+    for net in reversed(order):
+        w = g = 0
+        for ai, (wi, gi) in by_ai.get(net, {}).items():
+            if ai.startswith(("m28", "self@")) or "#" in ai:
+                continue
+            w, g = w + wi, g + gi
+        if g >= min_games:
+            measured.append((net, w, g))
+    if not measured or measured[0][1] / measured[0][2] >= floor:
+        return None
+    net, w, g = measured[0]
+    back = next((n for n, wi, gi in measured[1:] if wi / gi >= floor), None)
+    return f"{net} won {w}/{g} ({w / g:.0%}) against the standard AIs on small maps (floor {floor:.0%})", back
+
+
 def m28_level_rate(rounds: Path, allowed: set, level: float) -> tuple[int, int]:
     """(wins, games) against M28 at `level` by the networks in `allowed`, on maps up to LARGE_KM: large maps are
     learned later and their losses would move the level for the wrong reason (2026-10-12: x0.65 -> x0.6 on 40 %
@@ -413,6 +437,10 @@ def main():
                     help="stop and put the starting network back when a network's win rate on the player falls this "
                          "many points below the starting network's (over --guard-games games)")
     ap.add_argument("--guard-games", type=int, default=140)
+    ap.add_argument("--collapse-floor", type=float, default=0.4,
+                    help="a network winning under this against the standard AIs on small maps (over "
+                         "--collapse-games) is broken: back to the newest earlier network above it, without stopping")
+    ap.add_argument("--collapse-games", type=int, default=20, help="0: off")
     ap.add_argument("--distill", type=float, default=0.3, help="starting weight of M28's labels in learn_rl")
     ap.add_argument("--distill-min", type=float, default=0.05)
     ap.add_argument("--distill-max", type=float, default=0.6)
@@ -522,6 +550,28 @@ def main():
             if a.push:
                 push(a.host, "~/fa/player", back)
             break
+        broke = collapsed(rounds, a.init.resolve(), ckpts, [p.stem for p in chain[1:]], a.collapse_floor,
+                          a.collapse_games) if a.collapse_games else None
+        if broke and broke[1]:
+            what, name = broke
+            back = ckpts / f"{name}.pt"
+            print(f"[{datetime.now():%H:%M}] COLLAPSE: {what}; going on from {back.name}", flush=True)
+            with journal.open("a", encoding="utf-8") as f:   # the lineage cuts here (lineage(): a fallback row)
+                f.write(json.dumps({"iteration": k + 1, "collapse": what, "checkpoint": str(back),
+                                    "fallback": True}) + "\n")
+            chain = chain[: [p.stem for p in chain].index(name) + 1]
+            current = back
+            allowed = recent()
+            pending = []
+            if a.push:
+                push(a.host, "~/fa/player", back)
+            if a.local_home:
+                local_push(a.local_home, back)
+            k += 1                                      # the row counts as an iteration (k = len(done) on restart)
+            continue
+        if broke:
+            print(f"[{datetime.now():%H:%M}] COLLAPSE: {broke[0]}; no earlier network above the floor to go back "
+                  f"to, going on", flush=True)
         n_new = sum(len(list((rounds / n / "raw").glob("*.jsonl.gz"))) for n in new)
         if n_new < a.min_new_games and k > 0:
             print(f"[{datetime.now():%H:%M}] {n_new} new games; waiting for {a.min_new_games}", flush=True)
@@ -544,6 +594,9 @@ def main():
                 if vs_m28:
                     print(f"[{datetime.now():%H:%M}] against M28: {vs_m28}", flush=True)
         out = ckpts / f"rl_{k + 1:03d}.pt"
+        lineage_rounds = sorted(p.name for p in rounds.glob("lane*_*") if (p / "DONE").exists()
+                                and json.loads((p / "round.json").read_text()).get("checkpoint_sha256") in allowed)
+        (run_dir / "train_rounds.json").write_text(json.dumps(lineage_rounds))
         sil_args = []
         if a.sil_archive:
             for p in chain[-a.sil_networks:]:
@@ -557,7 +610,8 @@ def main():
                   f"({fresh} encoded now)", flush=True)
         args = ["-m", "fa_train.learn_rl", "--init", str(current), "--out", str(out), "--cache", str(cache),
                 "--reference", str(anchor()), "--max-games", str(a.games_per_iteration),
-                "--stop-file", str(run_dir / "STOP")] + a.learn_args.split() + ["--distill", f"{distill:.4f}"] \
+                "--stop-file", str(run_dir / "STOP"), "--rounds-file", str(run_dir / "train_rounds.json")] \
+            + a.learn_args.split() + ["--distill", f"{distill:.4f}"] \
             + sil_args
         t0 = time.monotonic()
         code = run(args, log)

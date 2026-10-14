@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fa_train.rl_loop import lineage, m28_level_rate, matched, opponent_mix, regression, sha256
+from fa_train.rl_loop import collapsed, lineage, m28_level_rate, matched, opponent_mix, regression, sha256
 
 
 def write_round(root: Path, name: str, sha: str, outcomes: dict, done: bool = True):
@@ -88,6 +88,44 @@ class RegressionGuardTest(unittest.TestCase):
             what, back = regression(rounds, start, ckpts, 8.0, 140)          # 80/144 = 56 %
             self.assertIn("rl_002+rl_003", what)
             self.assertEqual(back.name, "rl_001.pt")
+
+
+class CollapseTest(unittest.TestCase):
+    def setup(self, root: Path, results: dict):
+        """results: network -> {opponent: (wins, games)}."""
+        ckpts = root / "checkpoints"
+        ckpts.mkdir()
+        start = root / "start.pt"
+        start.write_bytes(b"start")
+        for i, (net, outcomes) in enumerate(results.items()):
+            path = ckpts / f"{net}.pt"
+            path.write_bytes(net.encode())
+            write_round(root / "rounds", f"lane{i}_{net}", sha256(path), outcomes)
+        return root / "rounds", start, ckpts
+
+    def test_a_broken_newest_network_goes_back_to_the_newest_healthy_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            rounds, start, ckpts = self.setup(Path(d), {"rl_001": {"rush": (20, 24)}, "rl_002": {"rush": (2, 10)},
+                                                         "rl_003": {"rush": (4, 21)}})
+            what, back = collapsed(rounds, start, ckpts, ["rl_001", "rl_002", "rl_003"], 0.4, 20)
+            self.assertIn("rl_003 won 4/21", what)
+            self.assertEqual(back, "rl_001")                 # rl_002: too few games to be measured
+
+    def test_the_newest_measured_network_decides(self):
+        with tempfile.TemporaryDirectory() as d:
+            rounds, start, ckpts = self.setup(Path(d), {"rl_001": {"rush": (4, 21)}, "rl_002": {"rush": (22, 24)}})
+            self.assertIsNone(collapsed(rounds, start, ckpts, ["rl_001", "rl_002"], 0.4, 20))   # recovered
+
+    def test_m28_and_self_play_do_not_count(self):
+        with tempfile.TemporaryDirectory() as d:
+            rounds, start, ckpts = self.setup(Path(d), {"rl_001": {"rush": (20, 24)}, "rl_002": {
+                "rush": (8, 10), "m28aicheat@0.6": (1, 30), "self@rl_001": (2, 30)}})
+            self.assertIsNone(collapsed(rounds, start, ckpts, ["rl_001", "rl_002"], 0.4, 20))   # rl_002 unmeasured
+
+    def test_abandoned_networks_are_not_judged(self):
+        with tempfile.TemporaryDirectory() as d:
+            rounds, start, ckpts = self.setup(Path(d), {"rl_001": {"rush": (20, 24)}, "rl_002": {"rush": (2, 30)}})
+            self.assertIsNone(collapsed(rounds, start, ckpts, ["rl_001"], 0.4, 20))
 
 
 if __name__ == "__main__":
