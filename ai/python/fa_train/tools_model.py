@@ -317,12 +317,19 @@ class ToolsNet(nn.Module):
         nn.init.zeros_(self.local_value.bias)
         # value (privileged inputs only here) and belief
         self.value_head = nn.Sequential(nn.Linear(core + 2 * len(PRIVILEGED), 256), nn.ReLU(), nn.Linear(256, 1))
+        # the opponent the game is against (learn_rl --opponent-critic; never seen when playing): one pool mixes AIs
+        # we beat 86 % of the time, M28 at three cheat levels (58 % .. 5 %) and our own networks, and a critic
+        # blind to which of them it faces turns "a hard opponent" into every decision's advantage. Added to the
+        # value, zero at the start (an older checkpoint's values are unchanged), trained by the critic's loss only
+        self.opp_value = nn.Sequential(nn.Linear(core + N_OPPONENT, 128), nn.ReLU(), nn.Linear(128, 1))
+        nn.init.zeros_(self.opp_value[2].weight)
+        nn.init.zeros_(self.opp_value[2].bias)
         self.belief_head = nn.Sequential(nn.Linear(core, 256), nn.ReLU(), nn.Linear(256, len(PRIVILEGED)))
         for head in (self.verb_head, self.option_head, self.count_head, self.place_head, self.spot_head):
             nn.init.orthogonal_(head.weight, gain=0.01)
             nn.init.zeros_(head.bias)
 
-    OPTIONAL_PREFIXES = ("local_value.", "fine_", "focus_")
+    OPTIONAL_PREFIXES = ("local_value.", "fine_", "focus_", "opp_")
 
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
         """As nn.Module's, except that parameters added later (OPTIONAL_PREFIXES) may be missing from older
@@ -1012,7 +1019,7 @@ class ToolsNet(nn.Module):
         actions, logp, ent, _, _ = self.decode(h, m, z, b, None, mode, temperature=temperature)
         # the units decoder's per-unit log-probabilities of this decision ([B,T]; None for the slots decoder)
         self.last_unit_logp = ent.get("unit_logp")
-        value = self.value_head(torch.cat([z, b["privileged"]], -1)).squeeze(-1)
+        value = self.value_of(z, b)
         if self.debug and self.last_debug is not None:
             self.last_debug["value"] = value
             self.last_debug["local_value"] = self.local_value(m).squeeze(1)                    # [B,G,G]
@@ -1056,9 +1063,17 @@ class ToolsNet(nn.Module):
         self.last_metrics = metrics
         return logp, ent, loss
 
+    def value_of(self, z, b: dict):
+        """The critic: the memory and the privileged inputs, plus the opponent's part when the batch says who it
+        is (training; a game being played has no "opponent" and its value is the value head's alone)."""
+        value = self.value_head(torch.cat([z, b["privileged"]], -1)).squeeze(-1)
+        if "opponent" in b:
+            value = value + self.opp_value(torch.cat([z, b["opponent"].to(z.dtype)], -1)).squeeze(-1)
+        return value
+
     def heads(self, z, b: dict):
         """Value (with the privileged inputs) and belief from the memory."""
-        return self.value_head(torch.cat([z, b["privileged"]], -1)).squeeze(-1), self.belief_head(z)
+        return self.value_of(z, b), self.belief_head(z)
 
     def evaluate(self, b: dict, actions: dict, state, seq_len: int, starts: torch.Tensor | None = None,
                  smoothing: float = 0.0, temperature: float = 1.0):
@@ -1091,6 +1106,38 @@ def parameter_count(module: nn.Module) -> int:
 
 
 # ---------------------------------------------------------------------- batching
+OPPONENT_FEATURES = ("adaptive", "rush", "tech", "scripted_other", "m28", "m28_cheat", "cheat_multiplier", "self")
+N_OPPONENT = len(OPPONENT_FEATURES)
+
+
+def opponent_features(ai: str) -> np.ndarray:
+    """The critic's opponent input from a game's opponent name ("adaptive", "m28aicheat@0.6", "m28ai",
+    "self@rl_089", ...)."""
+    f = np.zeros(N_OPPONENT, np.float32)
+    ai = str(ai or "")
+    if ai.startswith("self@"):
+        f[7] = 1.0
+    elif ai.startswith("m28"):
+        f[4] = 1.0
+        if "@" in ai:
+            f[5] = 1.0
+            try:
+                f[6] = float(ai.split("@", 1)[1].split(":")[0])
+            except ValueError:
+                pass
+    elif ai in ("adaptive", "rush", "tech"):
+        f[("adaptive", "rush", "tech").index(ai)] = 1.0
+    else:
+        f[3] = 1.0
+    return f
+
+
+def opponent_of_recording(source_name: str) -> str:
+    """A recording's opponent from its name, <uid>_<opponent>_<seed>.jsonl.gz (the opponent may hold '_')."""
+    parts = str(source_name).removesuffix(".jsonl.gz").split("_")
+    return "_".join(parts[1:-1]) if len(parts) >= 3 else ""
+
+
 def collate(observations: list[dict], device) -> dict:
     """Pad a list of ToolsObserver outputs (numpy) to one batch of tensors: tokens to the longest token list,
     candidates to the longest candidate list (at least one of each, so every softmax has a column)."""

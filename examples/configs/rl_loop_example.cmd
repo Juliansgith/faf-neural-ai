@@ -65,8 +65,20 @@ rem player configs; training had been 67 % UEF), the faf-re latest engine. Judge
 rem 2026-10-14 ~04:10: --archive-dir D:\archive\rl2: raw recordings older than 24 h and cache files older
 rem than 72 h are moved to D: each iteration (C: filled up at 03:50: recordings grow 50-70 GB a day). The first
 rem move by hand: D:\archive\rl2_cache_stale (format-11 cache, 56 GB), D:\archive\rl2_rounds_raw (86 GB).
+rem 2026-10-14 ~19:30 (iteration 127): no network since rl_089 has been better (rl_070-089 flat ~85 % vs
+rem scripted; every continuation from rl_089 went down). Changes, together:
+rem * champion gate (rl_loop --champion rl_089, --gate-games 100): each network against the best so far on
+rem   matched games; clearly worse -> back to the champion in place, clearly better -> the new champion. The
+rem   regression guard compared with the imitation start (76 %), 10 points under rl_089.
+rem * bigger batches: --games-per-iteration 480 --min-new-games 240 (were 240/60; rl_122-125 trained on ~100
+rem   games each). Games read memory-mapped (learn_rl --mapped): ~99 MB a game in RAM since the close-ups.
+rem * the critic told the opponent (learn_rl --opponent-critic; zero at the start, never seen when playing).
+rem * timeouts scored by who was ahead (--timeout-scale 10 --timeout-cost 2; were 5 x value advantage: a
+rem   timeout -4.5 against a defeat -18.6, stalling paid).
+rem * self-play OFF (no --league) until these are judged; then back on as a measured experiment.
+rem Also since 10:55: learn_rl trains on the lineage's rounds only (4b09750); --collapse-floor 0.4 (ccf6436).
 rem Stop: create _runs\server\rl2\STOP.
 set FAF=C:\faf
 set INIT=%FAF%\_runs\server\vaa_M\checkpoints\step_01.pt
 cd /d "%FAF%\faf-neural-ai\ai\python"
-"%FAF%\ai-venv\Scripts\python.exe" -u -m fa_train.rl_loop --run "%FAF%\_runs\server\rl2" --init "%INIT%" --reference "%INIT%" --push --games-per-iteration 240 --min-new-games 60 --recent-networks 4 --m28-curriculum --m28-start 0.6 --reference-lag 10 --local-home "%FAF%\_runs\local_player" --sil-archive 60 --archive-dir D:\archive\rl2 --league rl_077,rl_086,rl_089 --learn-args "--distill-large 4 --epochs 4 --lr 2e-5 --distill 0.3 --ref-coef 0.2 --streams 16 --micro 4 --grad-checkpoint --local-credit 0.5 --econ-coef 1.0 --econ-source capacity --reclaim-coef 0.5 --intel-coef 1.0 --map-coef 2.0 --waste-coef 1.0 --stall-coef 1.0" >> "%FAF%\_runs\server\rl2.log" 2>&1
+"%FAF%\ai-venv\Scripts\python.exe" -u -m fa_train.rl_loop --run "%FAF%\_runs\server\rl2" --init "%INIT%" --reference "%INIT%" --push --games-per-iteration 480 --min-new-games 240 --recent-networks 4 --m28-curriculum --m28-start 0.6 --reference-lag 10 --local-home "%FAF%\_runs\local_player" --sil-archive 60 --archive-dir D:\archive\rl2 --champion rl_089 --gate-games 100 --learn-args "--opponent-critic --timeout-scale 10 --timeout-cost 2 --mapped %FAF%\_runs\server\rl2\mapped --distill-large 4 --epochs 4 --lr 2e-5 --distill 0.3 --ref-coef 0.2 --streams 16 --micro 4 --grad-checkpoint --local-credit 0.5 --econ-coef 1.0 --econ-source capacity --reclaim-coef 0.5 --intel-coef 1.0 --map-coef 2.0 --waste-coef 1.0 --stall-coef 1.0" >> "%FAF%\_runs\server\rl2.log" 2>&1

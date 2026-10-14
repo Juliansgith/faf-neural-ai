@@ -210,6 +210,74 @@ def collapsed(rounds: Path, start: Path, ckpts: Path, order: list, floor: float,
     return f"{net} won {w}/{g} ({w / g:.0%}) against the standard AIs on small maps (floor {floor:.0%})", back
 
 
+def _stratified(ref: dict, cand: dict) -> tuple[float, float, int] | None:
+    """Mantel-Haenszel difference (cand - ref) of win rates over the conditions both played, its standard error,
+    and the candidate's games counted. ref/cand: condition -> [wins, games]."""
+    import math
+    num = den = var = 0.0
+    n_cand = 0
+    for cond, (wc, nc) in cand.items():
+        wr, nr = ref.get(cond, (0, 0))
+        if not nc or not nr:
+            continue
+        w = nc * nr / (nc + nr)
+        num += w * (wc / nc - wr / nr)
+        den += w
+        p = (wc + wr) / (nc + nr)
+        var += w * w * p * (1 - p) * (1 / nc + 1 / nr)
+        n_cand += nc
+    if den == 0:
+        return None
+    return num / den, math.sqrt(var) / den, n_cand
+
+
+def champion_gate(rounds: Path, start: Path, ckpts: Path, champion: str, order: list, min_games: int,
+                  since: str, z: float = 1.96):
+    """Each lineage network after the champion (the best network so far) against it, on the games they played:
+    small maps, the standard AIs and M28 (self-play aside: its opponents change), matched on (opponent, our
+    faction, theirs), from rounds since `since` (varied conditions). Returns None, ("worse", what, name to go
+    on from) when the newest measured network is clearly worse (its 95 % range below zero) -- the champion, or a
+    network after it that was clearly better -- or ("better", what, name) for the newest clearly better one.
+    The regression guard measured against the imitation start (76 % vs scripted), ~10 points under rl_089 (86 %),
+    so slides to ~70 % passed it (rl_122-124, 2026-10-14) and nothing kept a network for being better."""
+    names = _names(start, ckpts)
+    cells: dict = {}
+    for r in sorted(rounds.glob("lane*_*")):
+        if not (r / "DONE").exists() or r.name.split("_", 1)[-1] < since:
+            continue
+        episodes = r / "eval" / "episodes.jsonl"
+        net = names.get(json.loads((r / "round.json").read_text()).get("checkpoint_sha256"))
+        if net is None or not episodes.exists():
+            continue
+        for line in episodes.read_text().splitlines():
+            if not line.strip():
+                continue
+            e = json.loads(line)
+            if str(e.get("ai", "")).startswith("self@") or _map_km(e.get("map", "")) > LARGE_KM:
+                continue
+            c = cells.setdefault(net, {}).setdefault((e["ai"], e.get("faction"), e.get("ai_faction")), [0, 0])
+            c[0] += int(e.get("outcome") == "victory")
+            c[1] += 1
+    if champion not in order or champion not in cells:
+        return None
+    measured = []
+    for net in order[order.index(champion) + 1:]:
+        res = _stratified(cells[champion], cells.get(net, {}))
+        if res and res[2] >= min_games:
+            measured.append((net, *res))
+    if not measured:
+        return None
+    say = lambda m: (f"{m[0]} {100 * m[1]:+.1f} points vs {champion} (95 % {100 * (m[1] - z * m[2]):+.1f} .. "  # noqa: E731
+                     f"{100 * (m[1] + z * m[2]):+.1f}; {m[3]} matched games)")
+    better = [m for m in measured if m[1] - z * m[2] > 0]
+    newest = measured[-1]
+    if newest[1] + z * newest[2] < 0:
+        return "worse", say(newest), better[-1][0] if better else champion
+    if better:
+        return "better", say(better[-1]), better[-1][0]
+    return None
+
+
 def m28_level_rate(rounds: Path, allowed: set, level: float) -> tuple[int, int]:
     """(wins, games) against M28 at `level` by the networks in `allowed`, on maps up to LARGE_KM: large maps are
     learned later and their losses would move the level for the wrong reason (2026-10-12: x0.65 -> x0.6 on 40 %
@@ -441,6 +509,11 @@ def main():
                     help="a network winning under this against the standard AIs on small maps (over "
                          "--collapse-games) is broken: back to the newest earlier network above it, without stopping")
     ap.add_argument("--collapse-games", type=int, default=20, help="0: off")
+    ap.add_argument("--champion", help="the best network so far, judged against (default: the network the loop "
+                                       "starts from; then kept in <run>/champion.json)")
+    ap.add_argument("--gate-games", type=int, default=100,
+                    help="matched games a network needs before the champion gate judges it (0: off)")
+    ap.add_argument("--gate-since", default="20261013T2310Z", help="rounds from this stamp on (varied conditions)")
     ap.add_argument("--distill", type=float, default=0.3, help="starting weight of M28's labels in learn_rl")
     ap.add_argument("--distill-min", type=float, default=0.05)
     ap.add_argument("--distill-max", type=float, default=0.6)
@@ -470,6 +543,12 @@ def main():
     # games played by the newest --recent-networks networks are used
     chain = lineage(a.init.resolve(), done)
     shas = {}
+    champ_file = run_dir / "champion.json"
+    champion = json.loads(champ_file.read_text())["name"] if champ_file.exists() else (a.champion or current.stem)
+    if a.champion and a.champion != champion:
+        champion = a.champion
+    champ_file.write_text(json.dumps({"name": champion}))
+    print(f"[{datetime.now():%H:%M}] champion: {champion}", flush=True)
 
     def recent() -> set:
         for p in chain[-a.recent_networks:]:
@@ -484,6 +563,24 @@ def main():
         if a.reference_lag > 0 and len(chain) > a.reference_lag:
             return chain[-1 - a.reference_lag]
         return reference
+    def back_to(name: str, why: str, key: str) -> None:
+        """In place: the lineage cut back to `name` (a journal fallback row, as lineage() reads it), the players
+        given it; the loop goes on (the row counts as an iteration: k = len(done) on a restart)."""
+        nonlocal chain, current, allowed, pending, k
+        back = ckpts / f"{name}.pt"
+        with journal.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"iteration": k + 1, key: why, "checkpoint": str(back), "fallback": True}) + "\n")
+        stems = [p.stem for p in chain]
+        chain = chain[: stems.index(name) + 1] if name in stems else chain + [back]
+        current = back
+        allowed = recent()
+        pending = []
+        if a.push:
+            push(a.host, "~/fa/player", back)
+        if a.local_home:
+            local_push(a.local_home, back)
+        k += 1
+
     encoded = {n for row in done for n in row.get("rounds", [])}
     pending = []                                       # encoded rounds not yet counted by an iteration
     state_file = run_dir / "curriculum.json"
@@ -538,6 +635,28 @@ def main():
                         local_config(a.local_home, {"ai": opponent_mix(level, a.standard_ai, a.m28_weight, a.league, a.league_weight)})
                     state_file.write_text(json.dumps({"m28_level": level}))
                     print(f"[{datetime.now():%H:%M}] M28 curriculum x{old:g} -> x{level:g} (won {w}/{g})", flush=True)
+        broke = collapsed(rounds, a.init.resolve(), ckpts, [p.stem for p in chain[1:]], a.collapse_floor,
+                          a.collapse_games) if a.collapse_games else None
+        if broke and broke[1]:
+            print(f"[{datetime.now():%H:%M}] COLLAPSE: {broke[0]}; going on from {broke[1]}", flush=True)
+            back_to(broke[1], broke[0], "collapse")
+            continue
+        if broke:
+            print(f"[{datetime.now():%H:%M}] COLLAPSE: {broke[0]}; no earlier network above the floor to go back "
+                  f"to, going on", flush=True)
+        gate = champion_gate(rounds, a.init.resolve(), ckpts, champion, [p.stem for p in chain[1:]], a.gate_games,
+                             a.gate_since) if a.gate_games else None
+        if gate:
+            kind, what, name = gate
+            if name != champion:
+                print(f"[{datetime.now():%H:%M}] CHAMPION: {name} (was {champion}): "
+                      f"{what if kind == 'better' else 'clearly better earlier'}", flush=True)
+                champion = name
+                champ_file.write_text(json.dumps({"name": champion}))
+            if kind == "worse":
+                print(f"[{datetime.now():%H:%M}] GATE: {what}; going on from {name}", flush=True)
+                back_to(name, what, "gate")
+                continue
         bad = regression(rounds, a.init.resolve(), ckpts, a.guard_points, a.guard_games,
                          order=[p.stem for p in chain[1:]])
         if bad:
@@ -550,28 +669,6 @@ def main():
             if a.push:
                 push(a.host, "~/fa/player", back)
             break
-        broke = collapsed(rounds, a.init.resolve(), ckpts, [p.stem for p in chain[1:]], a.collapse_floor,
-                          a.collapse_games) if a.collapse_games else None
-        if broke and broke[1]:
-            what, name = broke
-            back = ckpts / f"{name}.pt"
-            print(f"[{datetime.now():%H:%M}] COLLAPSE: {what}; going on from {back.name}", flush=True)
-            with journal.open("a", encoding="utf-8") as f:   # the lineage cuts here (lineage(): a fallback row)
-                f.write(json.dumps({"iteration": k + 1, "collapse": what, "checkpoint": str(back),
-                                    "fallback": True}) + "\n")
-            chain = chain[: [p.stem for p in chain].index(name) + 1]
-            current = back
-            allowed = recent()
-            pending = []
-            if a.push:
-                push(a.host, "~/fa/player", back)
-            if a.local_home:
-                local_push(a.local_home, back)
-            k += 1                                      # the row counts as an iteration (k = len(done) on restart)
-            continue
-        if broke:
-            print(f"[{datetime.now():%H:%M}] COLLAPSE: {broke[0]}; no earlier network above the floor to go back "
-                  f"to, going on", flush=True)
         n_new = sum(len(list((rounds / n / "raw").glob("*.jsonl.gz"))) for n in new)
         if n_new < a.min_new_games and k > 0:
             print(f"[{datetime.now():%H:%M}] {n_new} new games; waiting for {a.min_new_games}", flush=True)

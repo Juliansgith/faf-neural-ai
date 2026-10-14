@@ -30,8 +30,8 @@ import numpy as np
 import torch
 
 from .tools_bc import REWARD_COMPONENTS, Games
-from .tools_model import (UNIT_KEYS, ToolsNet, apply_model_options, collate, model_options, parameter_count,
-                          stack_actions)
+from .tools_model import (N_OPPONENT, UNIT_KEYS, ToolsNet, apply_model_options, collate, model_options,
+                          opponent_features, opponent_of_recording, parameter_count, stack_actions)
 
 
 def load_net(path: Path, device) -> tuple[ToolsNet, dict]:
@@ -99,13 +99,22 @@ def discounted(r: np.ndarray, gamma: float) -> np.ndarray:
     return out
 
 
+def _outcome(g: dict) -> str | None:
+    try:
+        return json.loads(str(g["meta"].item())).get("outcome")
+    except (KeyError, ValueError, AttributeError):
+        return None
+
+
 def reward_spec(a) -> str:
     """What the reward is made of (stored in each checkpoint: a change is noticed by the next iteration)."""
     return (f"econ={a.econ_source};kills={a.econ_coef:g};reclaim={a.reclaim_coef:g};intel={a.intel_coef:g};"
             f"map={a.map_coef:g};waste={a.waste_coef:g};shaping={a.shaping:g}"
             + (f";stall={a.stall_coef:g};capacity=actual" if a.stall_coef else "")
             + (f";acu={a.acu_coef:g}/{a.acu_grace:g}/{a.acu_span:g}{'' if a.acu_all_maps else '/large'}"
-               if a.acu_coef else ""))
+               if a.acu_coef else "")
+            + (f";timeout={a.timeout_scale:g}/{a.timeout_cost:g}" if getattr(a, "timeout_scale", None) is not None
+               else ""))
 
 
 LEGACY_SPEC = "econ=recorded;kills=0;reclaim=0.5;intel=0;map=0;waste=0;shaping=1"
@@ -128,6 +137,13 @@ def rewards_of(g: dict, a) -> np.ndarray:
     games), and resources wasted to full storage (--waste-coef, a real cost)."""
     c = {k: np.asarray(g[f"rew_{k}"], np.float32) for k in REWARD_COMPONENTS}
     n = len(c["terminal"])
+    if getattr(a, "timeout_scale", None) is not None and _outcome(g) == "timeout":
+        # recorded as 5 x the value advantage (-1..1): at worst -5 against a defeat's -10, so in a game it is
+        # losing the network gained ~14 a game by stalling to the clock (4646 games, 2026-10-14: timeout -4.5,
+        # defeat -18.6 with shaping). Scored by who is ahead, a small cost for not finishing
+        va = float(c["terminal"][n - 1]) / 5.0
+        c["terminal"] = c["terminal"].copy()
+        c["terminal"][n - 1] = float(np.clip(a.timeout_scale * va, -10.0, 10.0)) - a.timeout_cost
     shaped = c["trade"] + c["commander"]
     if a.econ_source == "capacity":
         shaped = shaped + potential(np.asarray(g["mass_capacity"], np.float32)[:n] / 20.0, a.gamma)
@@ -285,6 +301,8 @@ def chunk_batch(games: Games, row: list, length: int, device, values=None, adv=N
     prox_rows, ref_rows = [], []
     from fa_env.tools import GRID
     loc_rows = []
+    opp_rows = []
+    opponents = getattr(games, "opponent", None)
     pad_obs = None
     for item in row:
         if item is None:
@@ -295,6 +313,7 @@ def chunk_batch(games: Games, row: list, length: int, device, values=None, adv=N
             if item is None or item[1] + t >= games.lengths[item[0]]:
                 g, step = (item[0], games.lengths[item[0]] - 1) if item is not None else (None, 0)
                 obs.append(games.step_obs(games.games[g], step) if g is not None else pad_obs)
+                opp_rows.append(opponents[g] if opponents is not None and g is not None else np.zeros(N_OPPONENT, np.float32))
                 n = len(obs[-1]["tokens"])
                 acts.append({k: np.full(n, 0 if k == "uverb" else -1, np.int64) for k in UNIT_KEYS})
                 labels.append({k: np.full(n, -1, np.int64) for k in UNIT_KEYS})
@@ -313,6 +332,7 @@ def chunk_batch(games: Games, row: list, length: int, device, values=None, adv=N
             g = games.games[gi]
             o, e = int(g["offsets_t"][step]), int(g["offsets_t"][step + 1])
             obs.append(games.step_obs(g, step))
+            opp_rows.append(opponents[gi] if opponents is not None else np.zeros(N_OPPONENT, np.float32))
             acts.append({k: np.asarray(g[f"pol_{k}"][o:e], np.int64) for k in UNIT_KEYS})
             labels.append({k: np.asarray(g[k][o:e], np.int64) for k in UNIT_KEYS})
             valid.append(bool(g["pol_has"][step]))
@@ -334,6 +354,8 @@ def chunk_batch(games: Games, row: list, length: int, device, values=None, adv=N
                 v_old.append(0.0), a_.append(0.0), r_.append(0.0), u_.append(0.0), k_.append(0.0)
                 loc_rows.append(None)
     b = collate(obs, device)
+    if opponents is not None:
+        b["opponent"] = torch.as_tensor(np.stack(opp_rows), dtype=torch.float32, device=device)
     T = b["tokens"].shape[1]
     act = {k: torch.as_tensor(v, device=device) for k, v in stack_actions(acts, T, "units").items()}
     lab = {k: torch.as_tensor(v, device=device) for k, v in stack_actions(labels, T, "units").items()}
@@ -359,6 +381,14 @@ def main():
     ap.add_argument("--cache", action="append", required=True, help="encoded recorded games (with pol_* arrays)")
     ap.add_argument("--reference", type=Path, help="frozen KL anchor (default: --init)")
     ap.add_argument("--max-games", type=int, default=0, help="only the newest this many games (0: all)")
+    ap.add_argument("--mapped", type=Path,
+                    help="read the games memory-mapped from this folder (unpacked there once; folders of games no "
+                         "longer chosen are removed) instead of loaded into RAM")
+    ap.add_argument("--opponent-critic", action="store_true",
+                    help="the critic is told the game's opponent (from the recording's name; never when playing)")
+    ap.add_argument("--timeout-scale", type=float, default=None,
+                    help="a timeout's terminal: this x the value advantage (-1..1), clipped to +-10 (default: as recorded, 5x)")
+    ap.add_argument("--timeout-cost", type=float, default=0.0, help="taken off a timeout's terminal (with --timeout-scale)")
     ap.add_argument("--rounds-file", type=Path,
                     help="JSON list of round folder names: only games recorded in them (rl_loop: the lineage's)")
     ap.add_argument("--epochs", type=int, default=2)
@@ -466,9 +496,26 @@ def main():
     # were the abandoned branch's -- every restart from rl_089 trained first on them (rl_102 on rl_096-098's
     # games, rl_113 on the commander-reward networks', 2026-10-14) and went downhill
     only = set(json.loads(a.rounds_file.read_text())) if a.rounds_file else None
-    games = Games([Path(c) for c in a.cache], newest=a.max_games + 60 if a.max_games else None, rounds=only)
+    # in RAM a game is ~99 MB since the fine positions and close-ups (2026-10-14: 300 games 30 GB, 540 games
+    # 53 GB; training died next to a 42 GB program): --mapped reads them from disk as they are needed
+    games = Games([Path(c) for c in a.cache], newest=a.max_games + 60 if a.max_games else None, rounds=only,
+                  mapped=a.mapped)
+    if a.mapped:
+        import shutil
+        keep = {f.name for f in games.folders}
+        for old in a.mapped.iterdir():
+            if old.is_dir() and old.name not in keep:
+                shutil.rmtree(old, ignore_errors=True)
     if only is not None:
         print(f"games: {len(games.games)} from the lineage's {len(only)} rounds", flush=True)
+    if a.opponent_critic:
+        games.opponent = {i: opponent_features(opponent_of_recording(g["_cache_manifest"].get("source_name", "")))
+                          for i, g in enumerate(games.games)}
+        kinds = {}
+        for i, g in enumerate(games.games):
+            k = opponent_of_recording(g["_cache_manifest"].get("source_name", "")).split("@")[0] or "?"
+            kinds[k] = kinds.get(k, 0) + 1
+        print(f"critic: told the opponent ({', '.join(f'{k} {v}' for k, v in sorted(kinds.items()))})", flush=True)
     games.units = True
     usable = [i for i, g in enumerate(games.games)
               if "pol_has" in g and bool(np.asarray(g["pol_has"]).any()) and all(f"rew_{c}" in g for c in REWARD_COMPONENTS)]
@@ -780,7 +827,7 @@ def value_warmup(net: ToolsNet, games: Games, usable: list, lengths: dict, ret: 
     """The value head alone fitted to the new returns for --value-warmup epochs: the memory and the policy stay
     as they are (the trunk runs without gradients), so the first iteration after a reward change does not
     compute its advantages with a critic of the old reward."""
-    head = list(net.value_head.parameters())
+    head = list(net.value_head.parameters()) + list(net.opp_value.parameters())
     opt = torch.optim.Adam(head, lr=3e-4)
     for epoch in range(a.value_warmup):
         rng = np.random.default_rng(1000 + epoch)
@@ -793,7 +840,7 @@ def value_warmup(net: ToolsNet, games: Games, usable: list, lengths: dict, ret: 
                             adv={i: ret[i] * 0 for i in usable}, adv_up=None)
             with torch.no_grad():
                 _, _, z, state_h = net.core(c["b"], state_h, a.length, c["starts"], return_state=True)
-            value = net.value_head(torch.cat([z, c["b"]["privileged"]], -1)).squeeze(-1)
+            value = net.value_of(z, c["b"])
             w = c["valid"] / float(c["valid"].sum() or 1.0)
             loss = 0.5 * (((value - c["ret"]) ** 2) * w).sum()
             opt.zero_grad(set_to_none=True)
