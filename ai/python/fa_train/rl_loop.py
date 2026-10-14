@@ -47,7 +47,7 @@ def _map_km(map_id: str) -> int:
         return 5
 
 
-def win_rates_by_ai(rounds: Path, names: dict) -> dict:
+def win_rates_by_ai(rounds: Path, names: dict, by_faction: bool = False) -> dict:
     """network name -> {opponent: [wins, games]} over the finished rounds it played. Games on maps larger than
     LARGE_KM count under "<opponent>#<km>km": the starting network played small maps only, and a large map's
     results compared with its small-map rate would read as a regression (2026-10-11, large maps join)."""
@@ -67,6 +67,8 @@ def win_rates_by_ai(rounds: Path, names: dict) -> dict:
                 e = json.loads(line)
                 km = _map_km(e.get("map", ""))
                 key = e["ai"] if km <= LARGE_KM else f"{e['ai']}#{km}km"
+                if by_faction:                  # the regression guard: our faction apart (a mix change is no regression)
+                    key += f"|f{e.get('faction')}"
                 w = out.setdefault(net, {}).setdefault(key, [0, 0])
                 w[0] += int(e.get("outcome") == "victory")
                 w[1] += 1
@@ -155,7 +157,9 @@ def regression(rounds: Path, start: Path, ckpts: Path, points: float, min_games:
     one 78 %) are not a trend, and going back to the starting network threw away every iteration since.
     `order`: the lineage's network names, oldest first (abandoned branches are not the newest networks: by name,
     the restart after a fallback to rl_089 pooled rl_091+092+096 and fell back again, 2026-10-13)."""
-    by_ai = win_rates_by_ai(rounds, _names(start, ckpts))
+    # compared per opponent and our faction: since 2026-10-14 the factions vary (they were 67 % UEF, the start's
+    # games too), and Cybran or Seraphim games where the start played none would read as a regression
+    by_ai = win_rates_by_ai(rounds, _names(start, ckpts), by_faction=True)
     if sum(g for ai, (w, g) in by_ai.get("start", {}).items() if not ai.startswith("m28")) < min_games:
         return None
     nets = [n for n in order if n in by_ai] if order is not None else sorted(n for n in by_ai if n != "start")
@@ -245,6 +249,28 @@ def league_push(host: str, home: str, local_home: Path | None, ckpts: Path, name
             (local_home / "league").mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, local_home / "league" / f"{name}.pt")
     print(f"[{datetime.now():%H:%M}] league: {', '.join(names)}", flush=True)
+
+
+def archive_old(rounds: Path, cache: Path, archive: Path, raw_hours: float, cache_hours: float) -> tuple[int, int]:
+    """Move finished rounds' raw recordings older than `raw_hours` and cache files older than `cache_hours` to
+    `archive` (a round keeps its round.json and eval/, and a RAW_ARCHIVED note with the new place). 2026-10-14:
+    recordings grow ~7 MB a game, 50-70 GB a day; the PC's system disk filled up and a round transfer failed."""
+    import shutil
+    import time as _time
+    now = _time.time()
+    raws = files = 0
+    for r in rounds.glob("lane*_*"):
+        if (r / "raw").is_dir() and (r / "DONE").exists() and now - r.stat().st_mtime > raw_hours * 3600:
+            (archive / "rounds_raw" / r.name).mkdir(parents=True, exist_ok=True)
+            shutil.move(str(r / "raw"), str(archive / "rounds_raw" / r.name / "raw"))
+            (r / "RAW_ARCHIVED").write_text(str(archive / "rounds_raw" / r.name / "raw"))
+            raws += 1
+    (archive / "cache").mkdir(parents=True, exist_ok=True)
+    for f in cache.glob("*.npz"):
+        if now - f.stat().st_mtime > cache_hours * 3600:
+            shutil.move(str(f), str(archive / "cache" / f.name))
+            files += 1
+    return raws, files
 
 
 def lineage(init: Path, done: list) -> list:
@@ -374,6 +400,9 @@ def main():
     ap.add_argument("--m28-min-games", type=int, default=36, help="games at a level before it may move")
     ap.add_argument("--m28-weight", type=float, default=2.0, help="the curriculum slot's games per standard AI's")
     ap.add_argument("--standard-ai", default="adaptive,rush,tech")
+    ap.add_argument("--archive-dir", type=Path, help="move old raw recordings and cache files here each iteration")
+    ap.add_argument("--archive-raw-hours", type=float, default=24.0)
+    ap.add_argument("--archive-cache-hours", type=float, default=72.0)
     ap.add_argument("--league", default="", help="self-play opponents: past networks' names (rl_NNN), copied to the "
                     "players' league folders at start")
     ap.add_argument("--league-weight", type=float, default=1.0)
@@ -452,6 +481,11 @@ def main():
         pull(a.host, "~/fa/player", rounds, keep=False)
         if a.local_home:
             local_collect(a.local_home, rounds)
+        if a.archive_dir:
+            moved = archive_old(rounds, cache, a.archive_dir, a.archive_raw_hours, a.archive_cache_hours)
+            if any(moved):
+                print(f"[{datetime.now():%H:%M}] archived: {moved[0]} rounds' recordings, {moved[1]} cache files "
+                      f"-> {a.archive_dir}", flush=True)
         new = []
         for p in sorted(rounds.glob("lane*_*")):
             if not (p / "DONE").exists() or p.name in encoded:

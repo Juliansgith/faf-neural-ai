@@ -53,8 +53,20 @@ rem comparison) with the commander's exposure on large maps as a potential (--ac
 rem 1 minute, full at 5; kept when the game is lost, given back when won; learn_rl phi_commander). The large-map
 rem imitation floor 0.4 (rl_090-093) is off: it took the small maps toward M28. The loop's chain, regression
 rem guard and imitation-weight basis follow the lineage (abandoned branches were anchors, rl_096).
+rem 2026-10-13 ~23:30 (iteration 108): SELF-PLAY (code 2f2c38e): past networks of ours as opponents, about 30 %
+rem of the games (--league rl_077,rl_086,rl_089: 'self@<name>' in the players' mix, <home>/league/<name>.pt).
+rem Both armies are M28 brains in shadow mode (labels for our side as always), army 2 played by the frozen
+rem network in the game's worker. Judge networks with _runs\tools\compare_nets.py (matched conditions).
+rem 2026-10-14 ~02:30 (iteration 112): commander exposure reward OFF, back to rl_089. rl_107 (the first with it)
+rem won 13/21 vs scripted on small maps (rl_089 91 %, same machine), matched -30 points (95 % -42..-17), and lost
+rem head-to-head to rl_089 2-5-3; rl_108 3-6-1. A large-map-only term trains the shared network (as the 0.4
+rem imitation floor did). Kept: self-play league, varied factions/maps/slots per round (vary_conditions in the
+rem player configs; training had been 67 % UEF), the faf-re latest engine. Judge with compare_nets + self-play.
+rem 2026-10-14 ~04:10: --archive-dir D:\archive\rl2: raw recordings older than 24 h and cache files older
+rem than 72 h are moved to D: each iteration (C: filled up at 03:50: recordings grow 50-70 GB a day). The first
+rem move by hand: D:\archive\rl2_cache_stale (format-11 cache, 56 GB), D:\archive\rl2_rounds_raw (86 GB).
 rem Stop: create _runs\server\rl2\STOP.
 set FAF=C:\faf
 set INIT=%FAF%\_runs\server\vaa_M\checkpoints\step_01.pt
 cd /d "%FAF%\faf-neural-ai\ai\python"
-"%FAF%\ai-venv\Scripts\python.exe" -u -m fa_train.rl_loop --run "%FAF%\_runs\server\rl2" --init "%INIT%" --reference "%INIT%" --push --games-per-iteration 240 --min-new-games 60 --recent-networks 4 --m28-curriculum --m28-start 0.6 --reference-lag 10 --local-home "%FAF%\_runs\local_player" --sil-archive 60 --learn-args "--acu-coef 3 --distill-large 4 --epochs 4 --lr 2e-5 --distill 0.3 --ref-coef 0.2 --streams 16 --micro 4 --grad-checkpoint --local-credit 0.5 --econ-coef 1.0 --econ-source capacity --reclaim-coef 0.5 --intel-coef 1.0 --map-coef 2.0 --waste-coef 1.0 --stall-coef 1.0" >> "%FAF%\_runs\server\rl2.log" 2>&1
+"%FAF%\ai-venv\Scripts\python.exe" -u -m fa_train.rl_loop --run "%FAF%\_runs\server\rl2" --init "%INIT%" --reference "%INIT%" --push --games-per-iteration 240 --min-new-games 60 --recent-networks 4 --m28-curriculum --m28-start 0.6 --reference-lag 10 --local-home "%FAF%\_runs\local_player" --sil-archive 60 --archive-dir D:\archive\rl2 --league rl_077,rl_086,rl_089 --learn-args "--distill-large 4 --epochs 4 --lr 2e-5 --distill 0.3 --ref-coef 0.2 --streams 16 --micro 4 --grad-checkpoint --local-credit 0.5 --econ-coef 1.0 --econ-source capacity --reclaim-coef 0.5 --intel-coef 1.0 --map-coef 2.0 --waste-coef 1.0 --stall-coef 1.0" >> "%FAF%\_runs\server\rl2.log" 2>&1

@@ -37,6 +37,8 @@ from fa_env.env import FAEnv  # noqa: E402
 from fa_env.teacher_v3 import TeacherV3  # noqa: E402
 from fa_env.tools_env import ToolsEnv  # noqa: E402
 
+WORKSPACE = Path(__file__).resolve().parents[2]   # the folder holding this repo
+
 LOAD_MARKERS = [
     ("init_lua", "Game version:"),
     ("user_lua", "Lua user environment initialized"),
@@ -235,7 +237,7 @@ def same(a, b, tol) -> bool:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default=r"C:\faf\_enginetest\bin\main.exe")
+    ap.add_argument("--exe", default=str(WORKSPACE / "_enginetest" / "bin" / "main.exe"))
     ap.add_argument("--script", default=str(HERE.parent / "ai" / "agentbridge.lua"))
     ap.add_argument("--out", required=True)
     ap.add_argument("--minutes", type=float, default=45)

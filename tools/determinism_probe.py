@@ -15,6 +15,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "ai" / "python"))
 from fa_env import FAEnv, GameConfig  # noqa: E402
 
+WORKSPACE = Path(__file__).resolve().parents[2]   # the folder holding this repo
+
 
 def run(exe: Path, minutes: float, ai: str, seed: int, omniscient: bool) -> list:
     env = FAEnv(GameConfig(map="SCMP_016", ai=ai, ai_faction=2, seed=seed, minimized=True, exe=exe, bin_dir=exe.parent,
@@ -35,7 +37,7 @@ def run(exe: Path, minutes: float, ai: str, seed: int, omniscient: bool) -> list
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default=r"C:\faf\_enginetest\bin_e\main.exe")
+    ap.add_argument("--exe", default=str(WORKSPACE / "_enginetest" / "bin_e" / "main.exe"))
     ap.add_argument("--minutes", type=float, default=8)
     ap.add_argument("--ai", default="adaptive")
     ap.add_argument("--seed", type=int, default=32)

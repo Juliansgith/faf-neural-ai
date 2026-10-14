@@ -6,10 +6,10 @@ map and faction luck is not counted as skill. Stratified (Mantel-Haenszel weight
     python compare_nets.py rl_089 rl_106 rl_107 ...      # each against the first
     python compare_nets.py rl_089 --newest 6              # the newest 6 networks against rl_089
 """
-import os
 import argparse
 import json
 import math
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -53,6 +53,22 @@ def load(run: Path) -> dict:
     return out
 
 
+MATCH = {"full": lambda c: c,                      # opponent, map, start slots, both factions
+         "map": lambda c: (c[0], c[1], c[3]),      # opponent, map, our faction
+         "faction": lambda c: (c[0], c[3], c[4])}  # opponent, both factions
+
+
+def coarsen(cells: dict, match: str) -> dict:
+    """Since 2026-10-14 the conditions are drawn per round (vary_conditions): exact rows rarely repeat across
+    networks, so match on fewer of them (still not counting faction or map luck as skill, only fewer pairs)."""
+    out = defaultdict(lambda: [0, 0])
+    for cond, (w, n) in cells.items():
+        k = MATCH[match](cond)
+        out[k][0] += w
+        out[k][1] += n
+    return out
+
+
 def compare(ref: dict, cand: dict) -> tuple[float, float, int, int] | None:
     """Stratified difference (cand - ref) in win rate, its standard error, and the games compared (each side)."""
     num = den = var = 0.0
@@ -81,6 +97,8 @@ def main():
     ap.add_argument("ref")
     ap.add_argument("cands", nargs="*")
     ap.add_argument("--newest", type=int, default=0)
+    ap.add_argument("--match", choices=sorted(MATCH), default="full",
+                    help="which conditions must agree: full row, opponent+map+our faction, or opponent+factions")
     ap.add_argument("--run", type=Path, default=FAF / "_runs" / "server" / "rl2")
     a = ap.parse_args()
     data = load(a.run)
@@ -88,9 +106,10 @@ def main():
     if a.newest:
         cands += sorted(n for n in data if n.startswith("rl_") and n > a.ref)[-a.newest:]
     for cand in cands:
-        print(f"{cand} vs {a.ref}:")
+        print(f"{cand} vs {a.ref} (match {a.match}):")
         for group in sorted(set(data[a.ref]) | set(data[cand])):
-            res = compare(data[a.ref].get(group, {}), data[cand].get(group, {}))
+            res = compare(coarsen(data[a.ref].get(group, {}), a.match),
+                          coarsen(data[cand].get(group, {}), a.match))
             if res is None:
                 continue
             d, se, nr, nc = res

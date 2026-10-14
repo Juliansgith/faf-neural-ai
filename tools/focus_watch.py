@@ -19,6 +19,8 @@ sys.path.insert(0, str(HERE.parent / "ai" / "python"))
 from fa_env import FAEnv, GameConfig  # noqa: E402
 from fa_env import bridge as bridge_mod  # noqa: E402
 
+WORKSPACE = Path(__file__).resolve().parents[2]   # the folder holding this repo
+
 user32 = ctypes.windll.user32
 
 
@@ -49,7 +51,7 @@ def on_screen(hwnd):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default=r"C:\faf\_enginetest\bin_e\main.exe")
+    ap.add_argument("--exe", default=str(WORKSPACE / "_enginetest" / "bin_e" / "main.exe"))
     ap.add_argument("--steps", type=int, default=20)
     a = ap.parse_args()
     exe = Path(a.exe)

@@ -105,6 +105,8 @@ def play_round(home: Path, lane: int, cfg: dict, seed_base: int, state: dict | N
         cmd += ["--labels", str(cfg["labels"])]
     if cfg.get("device"):
         cmd += ["--device", str(cfg["device"])]
+    if cfg.get("vary_conditions"):
+        cmd += ["--vary-conditions"]
     if cfg.get("act_gather_ms"):
         cmd += ["--act-gather-ms", str(cfg["act_gather_ms"]), "--act-min-batch", str(cfg.get("act_min_batch", 1))]
     t0 = time.monotonic()

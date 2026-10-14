@@ -1,7 +1,7 @@
 """Graph of every RL network's results on the server:  python rl_graph.py [run] [out.png]"""
-import os
 import json
 import math
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path

@@ -2,10 +2,10 @@
 networks of a run:  python rl_progress.py [run] [--since rl_036] [--wait-for rl_043 --games 100]
 
 With --wait-for: polls every 10 minutes until that network has --games matched games, then prints the table."""
-import os
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from collections import defaultdict

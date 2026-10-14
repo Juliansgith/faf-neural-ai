@@ -21,6 +21,8 @@ sys.path.insert(0, str(HERE))
 from fa_env import FAEnv, GameConfig  # noqa: E402
 from perf_game import diff_units, same  # noqa: E402
 
+WORKSPACE = Path(__file__).resolve().parents[2]   # the folder holding this repo
+
 SPAWN = r"""
 local brain = ArmyBrains[1]
 local x, z = brain:GetArmyStartPos()
@@ -106,7 +108,7 @@ return n
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default=r"C:\faf\_enginetest\bin_c\main.exe")
+    ap.add_argument("--exe", default=str(WORKSPACE / "_enginetest" / "bin_c" / "main.exe"))
     ap.add_argument("--script", default=str(HERE.parent / "ai" / "agentbridge.lua"))
     ap.add_argument("--steps", type=int, default=80)
     a = ap.parse_args()

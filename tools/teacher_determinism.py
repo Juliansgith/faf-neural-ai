@@ -25,6 +25,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "ai" / "python"))
 
+WORKSPACE = Path(__file__).resolve().parents[2]   # the folder holding this repo
+
 
 def digest(value) -> str:
     return hashlib.blake2b(json.dumps(value, sort_keys=True, separators=(",", ":")).encode(), digest_size=8).hexdigest()
@@ -176,7 +178,7 @@ def compare(a_path: Path, b_path: Path) -> int:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default=r"C:\faf\_enginetest\bin_det\main.exe")
+    ap.add_argument("--exe", default=str(WORKSPACE / "_enginetest" / "bin_det" / "main.exe"))
     ap.add_argument("--script", help="bridge script (default: the fa_env one)")
     ap.add_argument("--map", default="SCMP_016")
     ap.add_argument("--faction", type=int, default=1)

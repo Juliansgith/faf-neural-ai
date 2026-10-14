@@ -3,10 +3,11 @@
  "workers": 12,
  "torch_threads": 1,
  "games_per_ai": 1,
- "ai": "adaptive,rush,tech,m28aicheat@0.6:2,m28aicheat@0.75,m28ai",
+ "ai": "adaptive,rush,tech,m28aicheat@0.6:2,m28aicheat@0.75,m28ai,self@rl_089",
  "labels": "m28",
  "minutes": "40,55",
  "maps": "SCMP_012,SCMP_013,SCMP_003,SCMP_016,X1MP_001,SCMP_004,X1MP_002,SCMP_019,SCMP_006,SCMP_023,SCMP_012,SCMP_013",
  "temperature": 0.5,
- "bin_dir": "~/fa/bin"
+ "bin_dir": "~/fa/bin",
+ "vary_conditions": true
 }

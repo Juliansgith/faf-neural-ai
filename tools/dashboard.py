@@ -20,8 +20,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+WORKSPACE = Path(__file__).resolve().parents[2]   # the folder holding this repo
+
 HERE = Path(__file__).resolve().parent
-DEFAULT_RUNS = Path(r"C:\faf\_runs")
+DEFAULT_RUNS = WORKSPACE / "_runs"
 
 STATUS_RE = re.compile(r"^\[(\d\d:\d\d:\d\d)\] ([\d.]+) decisions/s, ([\d.]+) game-s/s, update (\d+), episodes (\d+), "
                        r"restarts (\d+)")

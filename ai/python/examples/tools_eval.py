@@ -40,14 +40,28 @@ def sha256(path: Path) -> str:
 
 def schedule_rows(ais: list[str], games, maps: list[str], ours: list[int],
                   theirs: list[int], minutes: float | None, seed_base: int,
-                  minutes_large: float | None = None) -> list[dict]:
+                  minutes_large: float | None = None, vary: bool = False) -> list[dict]:
     """The same row index has identical conditions against every opponent. `games`: per opponent, an int for all
-    or {opponent: count}."""
+    or {opponent: count}. `vary`: each row's map, both factions and the start slots drawn from the round's seed
+    (the same draw for a row index against every opponent); else the fixed walk below, the same every round --
+    which for training meant 10-12 games per opponent never left the first faction: 67 % UEF, 2 % Cybran,
+    <1 % Seraphim (2026-10-14)."""
+    import random
+
     from fa_env.maps import MAP_POOL, MINUTES_BY_KM
 
     rows = []
     for ai in ais:
         for i in range(games[ai] if isinstance(games, dict) else games):
+            if vary:
+                rng = random.Random(seed_base * 7919 + i)
+                map_id = rng.choice(maps)
+                entry = MAP_POOL[map_id]
+                rows.append({"ai": ai, "map": map_id, "slots": tuple(rng.choice(entry["slots"])),
+                             "faction": rng.choice(ours), "ai_faction": rng.choice(theirs), "seed": seed_base + i,
+                             "minutes": minutes_large if minutes_large is not None and entry["km"] > 10
+                             else minutes if minutes is not None else MINUTES_BY_KM[entry["km"]]})
+                continue
             map_id = maps[i % len(maps)]
             entry = MAP_POOL[map_id]
             # Cover every map/faction pair before repeating one. A later pass
@@ -94,6 +108,9 @@ def main() -> None:
                     "limit on maps above 10 km (a 20 km game needs longer to be won; the player passes its config's "
                     "'minutes' as it is, so \"40,55\" there needs no player restart)")
     ap.add_argument("--seed-base", type=int, default=900000)
+    ap.add_argument("--vary-conditions", action="store_true",
+                    help="draw each row's map, factions and start slots from the seed base (training rounds); also on "
+                         "when the run is a player round whose config says \"vary_conditions\": true")
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--record", type=Path, help="save raw recordings of the games to this folder")
@@ -151,7 +168,14 @@ def main() -> None:
     engine = bin_dir / "main.exe"
     if not checkpoint.is_file() or not engine.is_file():
         ap.error(f"checkpoint or engine missing: {checkpoint}, {engine}")
-    rows = schedule_rows(ais, counts, maps, ours, theirs, args.minutes, args.seed_base, minutes_large)
+    vary = bool(args.vary_conditions)
+    if not vary and args.run is not None:      # a player round: <home>/rounds/<round>/eval, its config at <home>
+        cfg_path = Path(args.run).resolve().parents[2] / "config.json"
+        try:
+            vary = bool(json.loads(cfg_path.read_text()).get("vary_conditions"))
+        except (OSError, ValueError, IndexError):
+            pass
+    rows = schedule_rows(ais, counts, maps, ours, theirs, args.minutes, args.seed_base, minutes_large, vary)
     run = args.run or Path(__file__).resolve().parents[4] / "_runs" / f"tools_eval-{datetime.now():%Y%m%d-%H%M%S}"
     manifest = {"checkpoint": str(checkpoint), "checkpoint_sha256": sha256(checkpoint),
                 "engine": str(engine), "engine_sha256": sha256(engine),

@@ -20,5 +20,17 @@ class BigMapTest(unittest.TestCase):
         self.assertEqual({r["minutes"] for r in rows}, {40.0})
 
 
+class VariedConditionsTest(unittest.TestCase):
+    def test_rounds_vary_but_opponents_share_each_row(self):
+        maps = ["SCMP_012", "SCMP_016", "SCMP_004"]
+        a = schedule_rows(["rush", "tech"], 12, maps, [1, 2, 3, 4], [1, 2, 3, 4], 40.0, 10000, vary=True)
+        b = schedule_rows(["rush", "tech"], 12, maps, [1, 2, 3, 4], [1, 2, 3, 4], 40.0, 20000, vary=True)
+        cond = lambda r: (r["map"], r["slots"], r["faction"], r["ai_faction"])       # noqa: E731
+        rush, tech = [cond(r) for r in a if r["ai"] == "rush"], [cond(r) for r in a if r["ai"] == "tech"]
+        self.assertEqual(rush, tech)                                   # paired within a round
+        self.assertNotEqual(rush, [cond(r) for r in b if r["ai"] == "rush"])          # another round, other games
+        self.assertGreater(len({c[2] for c in rush}), 1)               # not one faction
+
+
 if __name__ == "__main__":
     unittest.main()
