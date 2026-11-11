@@ -1,0 +1,8 @@
+[Unit]
+Description=FA RL run upkeep (stale learning pause, the forced-upgrade test's end)
+
+[Service]
+Type=oneshot
+User=agent
+WorkingDirectory=/home/agent/faf-neural-ai/ai/python
+ExecStart=/home/agent/venv/bin/python -m fa_train.rl3_watchdog

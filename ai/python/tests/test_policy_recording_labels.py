@@ -18,7 +18,13 @@ class PolicyRecordingLabelsTest(unittest.TestCase):
             hello['meta']['policy_command_labels'] = True
         observer = mock.Mock()
         observer.wrecks = []
-        observer.observe.return_value = tiny_observation(1)
+        fixture = tiny_observation(1)
+        # These tests isolate recording chronology with a synthetic observer.
+        # Supply its optional-capability fields as a no-factory/no-aircraft case.
+        fixture.update(tokens=np.zeros((1, 70), np.float32), token_type=np.zeros(1, np.int64),
+                       token_order=np.zeros(1, np.int64), load_subject_class=np.zeros(1, np.int64),
+                       load_target_class=np.zeros(1, np.int64), mask_target=np.zeros((5, 1), bool))
+        observer.observe.return_value = fixture
         rows = [{'step': {'tick': i * 2, **s}, 'msg': {'obs': {'tick': i * 2, 'units': []}}}
                 for i, s in enumerate(steps)]
         labels = []

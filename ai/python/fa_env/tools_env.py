@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import time
 from collections import deque
 
@@ -27,9 +28,12 @@ RECLAIM_SCAN_EVERY = 5                 # decisions between reclaim scans (the ob
 
 
 class ToolsEnv(FactoredEnv):
-    def __init__(self, *args, deduplicate_navigation=False, **kwargs):
+    def __init__(self, *args, deduplicate_navigation=False, commander_leash: float = 0.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.deduplicate_navigation = bool(deduplicate_navigation)
+        # an option, off (0) by default: on maps above 10 km the commander's own moves stay within this fraction
+        # of the start-to-start distance from our start (ToolKit.set_commander_leash; 0.5 proposed, 2026-10-17)
+        self.commander_leash = float(commander_leash or 0.0)
         self.kit: ToolKit | None = None
         self.observer: ToolsObserver | None = None
         self.rallied_by_player: set = set()     # factories this game's player has given a rally point
@@ -55,6 +59,8 @@ class ToolsEnv(FactoredEnv):
 
     def _tools_begin(self):
         self.kit = ToolKit(self.info, self.bps)
+        if getattr(self, "commander_leash", 0.0):
+            self.kit.set_commander_leash(self.start, self.enemy_start, self.commander_leash)
         self.observer = ToolsObserver(self.info, self.bps, self.me, self.kit)
         self.rallied_by_player = set()
         self.economy_snapshots = []
@@ -65,10 +71,35 @@ class ToolsEnv(FactoredEnv):
     def own_units(self) -> dict[str, dict]:
         return {str(u["id"]): u for u in self.obs.get("units", []) if u.get("army") == self.me}
 
+    def _forced_upgrades(self, tick: int) -> list[dict]:
+        """A causal test of the plateau report's association, for test games only: FA_ENV_FORCED_UPGRADES="8:1,11:1,14:2"
+        adds, at each listed game minute, upgrade orders to that many of our finished idle T1 extractors, on top of
+        what the network chose. Unset: nothing."""
+        spec = os.environ.get("FA_ENV_FORCED_UPGRADES", "")
+        if not spec:
+            return []
+        if tick < getattr(self, "_forced_tick", 0):
+            self._forced_done = set()
+        self._forced_tick = tick
+        done = getattr(self, "_forced_done", None)
+        if done is None:
+            done = self._forced_done = set()
+        out = []
+        for part in spec.split(","):
+            minute, count = part.split(":")
+            if part in done or tick < float(minute) * 600:
+                continue
+            done.add(part)
+            spots = [u for u in self.own_units() if str(u.get("bp", ""))[3:] == "1103" and float(u.get("frac", 0)) >= 1
+                     and u.get("idle")]
+            out += [{"verb": "upgrade", "subject": [str(u["id"])]} for u in spots[: int(count)]]
+        return out
+
     def step_tools(self, commands: list[dict]):
         t_start = time.monotonic()
         self.bridge_s = 0.0                 # time inside the bridge round trips (the game simulating and observing)
         tick = self.state.tick
+        commands = list(commands) + self._forced_upgrades(tick)
         self.state_tick_before = tick
         self.units_before = self.own_units()
         actions, queries, pending = self.kit.plan(commands, self.units_before, set(self.observer.taken))

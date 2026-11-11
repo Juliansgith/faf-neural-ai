@@ -28,6 +28,7 @@ import torch
 import torch.utils.checkpoint
 import torch.nn as nn
 import torch.nn.functional as F
+from .probability_accounting import smooth_log_probabilities, validate_acting_settings
 
 from fa_env.tools import (CELL_VERBS, COUNTS, FINE, FINE_UNITS, FIRE_STATES, GRID, MAX_COMMANDS, N_OPTIONS, OPTION_VERBS, PLACES,
                           SET_SUBJECT, SILO_KINDS, SINGLE_SUBJECT, SPOTS, TARGET_ROWS, TARGET_VERBS, VERBS)
@@ -50,6 +51,7 @@ SIZES = {
 V_END, V_BUILD, V_PRODUCE, V_UPGRADE, V_ENHANCE = (VERBS.index(v) for v in ("end", "build", "produce", "upgrade",
                                                                              "enhance"))
 V_FIRE, V_SILO, V_TOGGLE = (VERBS.index(v) for v in ("fire_state", "silo_build", "toggle"))
+V_LOAD = VERBS.index("load")
 V_CMOVE, V_CAMOVE = (VERBS.index(v) for v in ("commander_move", "commander_attack_move"))
 NEG = -1e9
 BUILD_BUDGET = 3
@@ -176,6 +178,10 @@ def _reduce_set_bc(per_unit, targets, eligible, balanced=False):
     return (pos + neg) / classes.clamp_min(1)
 
 
+AUX_ECON_HORIZONS = (30, 150, 600)                 # decisions ahead (2 s each): 1, 5 and 20 minutes
+N_AUX_ECON = 3 * len(AUX_ECON_HORIZONS)            # income, army, capacity
+
+
 class ToolsNet(nn.Module):
     def __init__(self, size: str = "M", amp: bool = False, decoder: str = "slots"):
         super().__init__()
@@ -192,6 +198,9 @@ class ToolsNet(nn.Module):
         # decoder and every probability stay in float32, which PPO's ratios need. Acting and training must
         # agree on it, or the same action gets two different log-probabilities.
         self.amp = amp
+        # the map network's input in channels_last (cpu_runtime.configure_model: the CPU learner); acting batches of 1-2
+        # are slower that way (0.77x), so it is off by default
+        self.map_channels_last = False
         self.bc_set_loss_mode = "mean"
         # builds per decision when the policy acts (and PPO scores its own actions); None while cloning. M28 gives
         # 1-1.5 per 2 s; the clone, decoding one command after another, kept adding builds -- ~15 a decision, its 24
@@ -203,8 +212,22 @@ class ToolsNet(nn.Module):
         self.act_top_p: float | None = None
         # units decoder, acting: verbs a unit would get with less than this probability are not chosen. Hundreds of
         # units each sampling a 0.1 % verb gave a stray hold-fire, pause or toggle every few decisions, and those
-        # stay in force (the first sampled games, 2026-10-05). Scoring ignores the cut (at most this much mass).
+        # stay in force (the first sampled games, 2026-10-05). Legacy scoring ignores the cut. The threshold is
+        # per verb; total removed probability can exceed it. An exact hard-support score also changes which
+        # recorded joint decisions have nonzero importance weight, so it needs a compatible learning design.
         self.act_min_p: float = 0.02
+        # None: the floor on every verb. A tuple: only on those verbs. The 2026-10-17 review proposed housekeeping
+        # verbs only ("fire_state", "toggle", "pause", "stop", "patrol", "dive": on every verb the floor removed 63 %
+        # of rl_089's own upgrades in a replay); deployed untested on 2026-10-20, rl_089 fell from 82 % to 49 % vs the
+        # scripted AIs on small maps (108 games) and from 57 % to 34 % vs M28 x0.6 -- hundreds of units each sampling
+        # their rare verbs. Back to every verb until a paired test says otherwise.
+        self.act_min_p_verbs: tuple | None = None
+        self.smooth_verb_floor = False
+        # with the smooth floor: `upgrade` keeps the probability the network gives it (2026-11-07: income per extractor
+        # stayed at T1's 2.1 for 30 minutes; a verb under the floor gets almost no samples, so no signal). Only
+        # extractors, factories and the like can upgrade, so few units sample it.
+        self.upgrade_floor_free = False
+        self.audit_probabilities = False        # diagnostics only; never changes sampled actions or scores
         # acting: the commander's destination is its most likely cell, not a sample -- one sampled step toward
         # the enemy with a damaged commander loses the game (lost games, 2026-10-06: the policy sent a commander
         # under half health toward the enemy 33 % of the time, M28 9 %)
@@ -214,6 +237,9 @@ class ToolsNet(nn.Module):
         # a model option: the fine pixel inside a chosen cell on maps above 5 km (a network trained with the fine
         # head); off, orders go to the cell (centre) as before -- an older network never samples an untrained head
         self.fine_positions: bool = False
+        self.installed_enhancements: bool = False
+        self.air_refueling: bool = False
+        self.queued_factory_upgrades: bool = False
         d, core, mc = cfg["d"], cfg["core"], cfg["map_ch"]
         self.d, self.core_dim, self.map_ch = d, core, mc
         # tokens
@@ -227,6 +253,7 @@ class ToolsNet(nn.Module):
         # training: recompute the encoder and the decoder in the backward pass instead of keeping their
         # activations (the whole batch's token embeddings, map features and per-unit logits): roughly half the
         # memory for ~30 % more time. Set by the trainer (tools_bc --grad-checkpoint).
+        self.sequence_lstm = True
         self.grad_checkpoint: bool = False
         # the watch debugger (tools_eval --watch): forward_step keeps what the decision was made of in last_debug
         self.debug: bool = False
@@ -235,6 +262,10 @@ class ToolsNet(nn.Module):
         # blueprint and enhancement candidates
         self.cand_in = nn.Sequential(nn.Linear(N_CAND_FEATURES + 16, d), nn.ReLU(), nn.Linear(d, d))
         self.enh_embed = nn.Embedding(ENH_VOCAB, 16)
+        # Reuse the upgrade vocabulary for installed own upgrades. This residual
+        # starts at zero without consuming RNG or changing legacy policy outputs.
+        self.installed_enh_weight = nn.Parameter(torch.zeros(d, 16))
+        self.refuel_weight = nn.Parameter(torch.zeros(d, 5))
         self.enh_in = nn.Sequential(nn.Linear(N_ENH_FEATURES + 16, d), nn.ReLU(), nn.Linear(d, d))
         # map
         self.scatter = nn.Linear(d, 16)
@@ -325,11 +356,16 @@ class ToolsNet(nn.Module):
         nn.init.zeros_(self.opp_value[2].weight)
         nn.init.zeros_(self.opp_value[2].bias)
         self.belief_head = nn.Sequential(nn.Linear(core, 256), nn.ReLU(), nn.Linear(256, len(PRIVILEGED)))
+        # learn_rl --aux-econ (2026-11-09): where income, army and capacity are heading (N_AUX_ECON outputs). Not used
+        # for acting; zero at the start, and trained into the memory only through its own small loss
+        self.aux_econ = nn.Linear(core, N_AUX_ECON)
+        nn.init.zeros_(self.aux_econ.weight)
+        nn.init.zeros_(self.aux_econ.bias)
         for head in (self.verb_head, self.option_head, self.count_head, self.place_head, self.spot_head):
             nn.init.orthogonal_(head.weight, gain=0.01)
             nn.init.zeros_(head.bias)
 
-    OPTIONAL_PREFIXES = ("local_value.", "fine_", "focus_", "opp_")
+    OPTIONAL_PREFIXES = ("local_value.", "fine_", "focus_", "opp_", "installed_enh_", "refuel_", "aux_econ.")
 
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
         """As nn.Module's, except that parameters added later (OPTIONAL_PREFIXES) may be missing from older
@@ -359,6 +395,18 @@ class ToolsNet(nn.Module):
                        self.order_embed(b["token_order"].clamp(0, N_ORDERS - 1)),
                        self.last_embed(b["token_last"].clamp(0, V - 1)), b["token_last_feat"]], -1)
         h = self.tok_in(x)
+        if self.installed_enhancements:
+            if 'token_enhancements' not in b:
+                raise ValueError('Installed-enhancement policy requires current observation/cache format')
+            ids = b['token_enhancements'].long().clamp(0, ENH_VOCAB - 1)
+            present = (ids > 0) & (b['token_type'] == 0).unsqueeze(-1) & tmask.unsqueeze(-1)
+            installed = (self.enh_embed(ids) * present.unsqueeze(-1)).sum(-2)
+            h = h + F.linear(installed, self.installed_enh_weight)
+        if self.air_refueling:
+            if 'token_refueling' not in b:
+                raise ValueError('Air-refueling policy requires current observation/cache format')
+            own = ((b['token_type'] == 0) & tmask).unsqueeze(-1)
+            h = h + F.linear(b['token_refueling'] * own, self.refuel_weight)
         pad = ~tmask & tmask.any(1, keepdim=True)          # an observation without tokens attends to padding
         h = self.transformer(h, src_key_padding_mask=pad)
         h = self.tok_norm(h) * tmask.unsqueeze(-1)
@@ -369,7 +417,10 @@ class ToolsNet(nn.Module):
         sc = self.scatter(h) * tmask.unsqueeze(-1)
         grid = torch.zeros(B, G2, 16, device=tok.device, dtype=sc.dtype).scatter_add_(1, idx, sc)
         grid = grid.transpose(1, 2).reshape(B, 16, GRID, GRID)
-        m = self.map_blocks(self.map_in(torch.cat([b["map"], grid], 1)))
+        x = torch.cat([b["map"], grid], 1)
+        if getattr(self, "map_channels_last", False):      # learner batches: oneDNN's convolutions 1.31x faster (see configure_model)
+            x = x.contiguous(memory_format=torch.channels_last)
+        m = self.map_blocks(self.map_in(x))
         map_vec = F.relu(self.map_vec(self.map_down(m).flatten(1)))
         # token summaries: mean of own, mean of enemy-side (seen, remembered, radar), mean of the rest, max of all
         ttype = b["token_type"]
@@ -425,32 +476,36 @@ class ToolsNet(nn.Module):
     def decode(self, h, m, z, b, actions: dict | None = None, mode: str = "sample", smoothing: float = 0.0,
                temperature: float = 1.0):
         """Choose (or, with `actions`, score) a decision's commands with this network's decoder."""
+        if self.air_refueling:
+            b = self.refueling_masks(b)
+        if self.queued_factory_upgrades:
+            from fa_env.factory_upgrades import enabled_batch
+            b = enabled_batch(b)
         if self.decoder == "units":
             return self.decode_units(h, m, z, b, actions, mode, smoothing, temperature)
         return self.decode_slots(h, m, z, b, actions, mode, smoothing, temperature)
 
-    def decode_units(self, h, m, z, b, actions: dict | None = None, mode: str = "sample", smoothing: float = 0.0,
-                     temperature: float = 1.0):
-        """Every own unit at once: nothing (0) or a verb, then that unit's arguments, chosen as the slots decoder
-        chooses a single-subject command's (the argument heads are the same). With `actions` (UNIT_KEYS, [B,T]
-        each; `uverb` -1 = unknown, not scored) it scores them. Returns (actions, logp [B], entropy dict of [B],
-        bc loss [B], metrics)."""
-        inv_t = 1.0 / temperature
-        top_p = self.act_top_p if actions is None else None
-        B, T, d = h.shape
-        dev = h.device
-        full = actions is not None
-        mflat = m.flatten(2)                                   # [B,C,G2]
-        cell_bias = self.cell_bias(m).flatten(1)               # [B,G2]
-        has_option, needs_cell = HAS_OPTION.to(dev), NEEDS_CELL.to(dev)
-        target_row, fire_options = TARGET_ROW.to(dev), FIRE_OPTIONS.to(dev)
-        cand_h, enh_h = self.candidates(b)                     # [B,C,d], [B,E,d]
-        cand_kind = b["cand_kind"]
-        tokmask = b["token_mask"]
-        scale_d, scale_c = 1.0 / math.sqrt(d), 1.0 / math.sqrt(self.map_ch)
-        ent = {k: torch.zeros(B, device=dev) for k in ENTROPY_KEYS}
-        metrics = {k: [torch.zeros(B, device=dev), torch.zeros(B, device=dev)] for k in UNIT_METRIC_KEYS}
+    @staticmethod
+    def refueling_masks(b):
+        if not all(k in b for k in ('load_subject_class', 'load_target_class')):
+            raise ValueError('Air-refueling policy requires current observation/cache format')
+        own = (b['token_type'] == 0) & b['token_mask']
+        subjects = b['load_subject_class'] * own
+        targets = b['load_target_class'] * own
+        available = torch.stack([((targets & bit) != 0).any(-1) for bit in (1, 2)], -1)
+        eligible = ((subjects == 1) & available[:, 0:1]) | ((subjects == 2) & available[:, 1:2])
+        out = {**b, 'mask_subject': b['mask_subject'].clone(),
+               'mask_target': b['mask_target'].clone(), 'mask_verb': b['mask_verb'].clone(),
+               'load_subject_class': subjects, 'load_target_class': targets}
+        out['mask_subject'][:, V_LOAD] = eligible
+        out['mask_target'][:, TARGET_ROWS.index('transport')] = targets != 0
+        out['mask_verb'][:, V_LOAD] = eligible.any(-1)
+        return out
 
+    def prepare_units(self, h, m, z, b):
+        """Action-independent decoder work shared by policy and teacher scoring."""
+        B, T, _ = h.shape
+        dev, tokmask = h.device, b["token_mask"]
         # 1. every unit: nothing, or a verb it can be given now
         ctx_all = self.unit_in(torch.cat([h, z.unsqueeze(1).expand(-1, T, -1)], -1))        # [B,T,core]
         vmask = (b["mask_subject"] & tokmask.unsqueeze(1)).transpose(1, 2) & b["mask_verb"].unsqueeze(1)  # [B,T,V]
@@ -471,7 +526,15 @@ class ToolsNet(nn.Module):
         own_on = torch.arange(Uo, device=dev).unsqueeze(0) < n_own.unsqueeze(1)                # [B,Uo]
         gather_idx = own_idx.unsqueeze(-1).expand(-1, -1, ctx_all.shape[-1])
         x = (ctx_all + intent).gather(1, gather_idx)
-        x = self.unit_attn(x, src_key_padding_mask=~own_on)
+        if self.amp and not x.is_cuda:
+            # 2026-11-10: with `amp` on a CPU the units' attention runs in bf16 too (the CPU learner's decoder took ~70 %
+            # of a step, this block about half of it); its output goes back to float32 before the heads and
+            # probabilities. GPU training keeps it in float32 as before.
+            with torch.autocast("cpu", dtype=torch.bfloat16):
+                x = self.unit_attn(x, src_key_padding_mask=~own_on)
+            x = x.float()
+        else:
+            x = self.unit_attn(x, src_key_padding_mask=~own_on)
         x = torch.where(own_on.unsqueeze(-1), x, ctx_all.gather(1, gather_idx))
         ctx_all = ctx_all.scatter(1, gather_idx, x)
         # The final verbs. Until 2026-10-09 they were the first pass's (`first`, computed before the attention): the
@@ -479,6 +542,35 @@ class ToolsNet(nn.Module):
         # takes the build. `verbs_after_attention` (a model option, saved with the checkpoint) decides them from the
         # attended context; the attention starts as the identity, so a network gets it only by training with it.
         vlog = self.verb_head(ctx_all).masked_fill(~vmask, NEG) if self.verbs_after_attention else first
+        if self.smooth_verb_floor:
+            vlog = smooth_log_probabilities(vlog, vmask, (V_UPGRADE,) if self.upgrade_floor_free else ())
+        cand_h, enh_h = self.candidates(b)
+        return ctx_all, vmask, actor, vlog, cand_h, enh_h, self.cell_bias(m).flatten(1)
+
+    def decode_units(self, h, m, z, b, actions: dict | None = None, mode: str = "sample", smoothing: float = 0.0,
+                     temperature: float = 1.0, prepared=None):
+        """Every own unit at once: nothing (0) or a verb, then that unit's arguments, chosen as the slots decoder
+        chooses a single-subject command's (the argument heads are the same). With `actions` (UNIT_KEYS, [B,T]
+        each; `uverb` -1 = unknown, not scored) it scores them. Returns (actions, logp [B], entropy dict of [B],
+        bc loss [B], metrics)."""
+        validate_acting_settings(self, mode if actions is None else "sample", temperature)
+        inv_t = 1.0 / temperature
+        top_p = self.act_top_p if actions is None else None
+        B, T, d = h.shape
+        dev = h.device
+        full = actions is not None
+        mflat = m.flatten(2)                                   # [B,C,G2]
+        has_option, needs_cell = HAS_OPTION.to(dev), NEEDS_CELL.to(dev)
+        target_row, fire_options = TARGET_ROW.to(dev), FIRE_OPTIONS.to(dev)
+        cand_kind = b["cand_kind"]
+        tokmask = b["token_mask"]
+        scale_d, scale_c = 1.0 / math.sqrt(d), 1.0 / math.sqrt(self.map_ch)
+        ent = {k: torch.zeros(B, device=dev) for k in ENTROPY_KEYS}
+        metrics = {k: [torch.zeros(B, device=dev), torch.zeros(B, device=dev)] for k in UNIT_METRIC_KEYS}
+
+        if prepared is None:
+            prepared = self.prepare_units(h, m, z, b)
+        ctx_all, vmask, actor, vlog, cand_h, enh_h, cell_bias = prepared
         # an optional per-unit weight of the loss (actions["uweight"], [B,T]): what a unit's lesson counts
         uw = actions.get("uweight") if actions is not None else None
         if actions is not None:
@@ -487,12 +579,33 @@ class ToolsNet(nn.Module):
         else:
             known = actor
             pick = vlog
-            if self.act_min_p:
+            if self.act_min_p and not self.smooth_verb_floor:
                 rare = F.softmax(vlog, -1) < self.act_min_p
                 rare[..., V_END] = False
+                if self.act_min_p_verbs is not None:
+                    floor_on = torch.zeros(rare.shape[-1], dtype=torch.bool, device=rare.device)
+                    floor_on[[VERBS.index(v) for v in self.act_min_p_verbs if v in VERBS]] = True
+                    rare = rare & floor_on
                 pick = vlog.masked_fill(rare, NEG)
             uverb = _pick(pick, None, "sample", top_p) * actor
         lp_all = F.log_softmax(vlog, -1)
+        if self.audit_probabilities:
+            rare = lp_all.exp() < self.act_min_p
+            rare[..., V_END] = False
+            if self.act_min_p_verbs is not None:
+                floor_on = torch.zeros(rare.shape[-1], dtype=torch.bool, device=rare.device)
+                floor_on[[VERBS.index(v) for v in self.act_min_p_verbs if v in VERBS]] = True
+                rare = rare & floor_on
+            if self.smooth_verb_floor:
+                rare = torch.zeros_like(rare)  # continuous filter removes no legal support
+            ent["verb_removed_mass"] = (lp_all.exp() * rare).sum(-1)
+            ent["verb_below_floor"] = rare.gather(-1, uverb.unsqueeze(-1)).squeeze(-1)
+            ent["verb_mode"] = vlog.masked_fill(rare, NEG).argmax(-1)
+            commander = (b["mask_subject"][:, V_CMOVE] & tokmask).float()
+            ent["commander_count"] = commander.sum(-1)
+            ent["commander_verb_probability"] = (lp_all.exp() * commander.unsqueeze(-1)).sum(1)
+            ent["commander_verb_removed_probability"] = (
+                lp_all.exp() * rare * commander.unsqueeze(-1)).sum(1)
         lp_v = lp_all.gather(-1, uverb.unsqueeze(-1)).squeeze(-1)
         knownf = known.float()
         unit_lp = lp_v * knownf                                # [B,T] each unit's own log-probability (verb + args)
@@ -621,6 +734,10 @@ class ToolsNet(nn.Module):
         trow = target_row[verb]
         tg = (trow >= 0) & on
         tmask_row = row_of(_safe(b["mask_target"] & tokmask.unsqueeze(1)), trow.clamp(min=0))  # [B,U,T]
+        if self.air_refueling:
+            subject_class = b['load_subject_class'].gather(1, idx)
+            pair = (subject_class.unsqueeze(-1) & b['load_target_class'].unsqueeze(1)) != 0
+            tmask_row = _safe(torch.where((verb == V_LOAD).unsqueeze(-1), pair, tmask_row))
         t_logits = (torch.einsum("btd,bud->but", h, self.tgt_q(ctx)) * (scale_d * inv_t)).masked_fill(~tmask_row, NEG)
         target = _pick(t_logits, lab("utarget"), mode, top_p)
         score(t_logits, target, tmask_row, tg, "target", "target")
@@ -737,6 +854,7 @@ class ToolsNet(nn.Module):
         """Run the MAX_COMMANDS slots. With `actions` it scores them (teacher forcing); otherwise it chooses
         ('sample' or 'greedy'). Every head's logits are divided by `temperature`. Returns (actions, logp [B],
         entropy dict of [B], bc loss [B], metrics)."""
+        validate_acting_settings(self, mode if actions is None else "sample", temperature)
         inv_t = 1.0 / temperature
         top_p = self.act_top_p if actions is None else None
         B, T, d = h.shape
@@ -846,8 +964,11 @@ class ToolsNet(nn.Module):
             mctx = ctx + self.lead_proj(h[ar, s_choice])
             blog = (torch.einsum("btd,bd->bt", h, self.member_q(mctx)) * scale_d + self.set_bias(mctx)) * inv_t
             mmask = smask & ~lead
+            if self.air_refueling:
+                same = b['load_subject_class'] == b['load_subject_class'][ar, s_choice].unsqueeze(-1)
+                mmask = mmask & ((verb != V_LOAD).unsqueeze(-1) | same)
             if actions is not None:
-                joined = given_set & ~lead
+                joined = given_set & mmask
             elif mode == "greedy":
                 joined = (blog > 0) & mmask
             else:
@@ -959,6 +1080,9 @@ class ToolsNet(nn.Module):
             trow = target_row[verb]
             tg = (trow >= 0) & doing
             tmask_row = target_all[ar, trow.clamp(min=0)]
+            if self.air_refueling:
+                pair = (b['load_subject_class'][ar, s_choice].unsqueeze(-1) & b['load_target_class']) != 0
+                tmask_row = _safe(torch.where((verb == V_LOAD).unsqueeze(-1), pair, tmask_row))
             t_logits = pointer(h, self.tgt_q(ctx), tmask_row)
             target = _pick(t_logits, lab("target"), mode, top_p)
             parts.append(("target", *score(t_logits, target, tmask_row, tg.float(), "target")))
@@ -1039,17 +1163,30 @@ class ToolsNet(nn.Module):
         N = core_in.shape[0]
         n_seq = N // seq_len
         x = core_in.view(n_seq, seq_len, -1)
-        hs, cs = state
-        zs = []
-        for t in range(seq_len):
-            if starts is not None:
-                keep = (~starts.view(n_seq, seq_len)[:, t]).float().view(1, n_seq, 1)
-                hs, cs = hs * keep, cs * keep
-            z, (hs, cs) = self.lstm(x[:, t:t + 1], (hs, cs))
-            zs.append(z)
+        z, final_state = self.recurrent(x, state, starts)
+        z = z.reshape(N, -1)
         if return_state:
-            return h, m, torch.cat(zs, 1).reshape(N, -1), (hs, cs)
-        return h, m, torch.cat(zs, 1).reshape(N, -1)
+            return h, m, z, final_state
+        return h, m, z
+
+    def recurrent(self, x, state, starts=None):
+        """Run whole segments, splitting wherever any stream resets its memory."""
+        length = x.shape[1]
+        reset = None if starts is None else starts.reshape(x.shape[:2]).bool()
+        if self.sequence_lstm:
+            boundaries = [] if reset is None else (reset[:, 1:].any(0).nonzero().flatten() + 1).tolist()
+            boundaries = [0, *boundaries, length]
+        else:
+            boundaries = list(range(length + 1))
+        outputs = []
+        hs, cs = state
+        for begin, end in zip(boundaries, boundaries[1:]):
+            if reset is not None:
+                keep = (~reset[:, begin]).view(1, -1, 1).to(hs.dtype)
+                hs, cs = hs * keep, cs * keep
+            z, (hs, cs) = self.lstm(x[:, begin:end], (hs, cs))
+            outputs.append(z)
+        return torch.cat(outputs, 1), (hs, cs)
 
     def score(self, h, m, z, b: dict, actions: dict, smoothing: float = 0.0, temperature: float = 1.0):
         """Score given actions on a `core` output: (logp, entropy dict, bc loss), all [N]; the agreement per
@@ -1062,6 +1199,31 @@ class ToolsNet(nn.Module):
                                                       temperature=temperature)
         self.last_metrics = metrics
         return logp, ent, loss
+
+    def score_pair(self, h, m, z, b, actions, labels, temperature=1.0, smoothing=0.05):
+        """Score PPO actions and imitation labels with one shared preparation graph."""
+        def compute(h, m, z):
+            batch = b
+            if self.air_refueling:
+                batch = self.refueling_masks(batch)
+            if self.queued_factory_upgrades:
+                from fa_env.factory_upgrades import enabled_batch
+                batch = enabled_batch(batch)
+            prepared = self.prepare_units(h, m, z, batch)
+            _, lp, ent, _, _ = self.decode_units(
+                h, m, z, batch, actions, temperature=temperature, prepared=prepared)
+            _, _, _, bc, metrics = self.decode_units(
+                h, m, z, batch, labels, smoothing=smoothing, prepared=prepared)
+            self.last_metrics = metrics
+            return lp, ent, bc
+
+        if self.decoder != "units":
+            lp, ent, _ = self.score(h, m, z, b, actions, temperature=temperature)
+            _, _, bc = self.score(h, m, z, b, labels, smoothing=smoothing)
+            return lp, ent, bc
+        if self.grad_checkpoint and self.training and torch.is_grad_enabled():
+            return torch.utils.checkpoint.checkpoint(compute, h, m, z, use_reentrant=False)
+        return compute(h, m, z)
 
     def value_of(self, z, b: dict):
         """The critic: the memory and the privileged inputs, plus the opponent's part when the batch says who it
@@ -1087,15 +1249,42 @@ class ToolsNet(nn.Module):
 
 # Behaviour switches of a trained network that are not weights: a checkpoint saves them ("model_options") and
 # every loader applies them, so a network always runs as it was trained. Missing: False (older checkpoints).
-MODEL_OPTIONS = ("verbs_after_attention", "fine_positions")
+MODEL_OPTIONS = ("verbs_after_attention", "fine_positions", "installed_enhancements", "air_refueling", "queued_factory_upgrades", "smooth_verb_floor", "upgrade_floor_free")
 
 
 def model_options(net: "ToolsNet") -> dict:
     return {k: bool(getattr(net, k, False)) for k in MODEL_OPTIONS}
 
 
+def compatible_optimizer_state(net: "ToolsNet", state: dict, model: dict) -> dict:
+    """Preserve Adam moments when resuming a checkpoint predating the new input.
+
+    ToolsTrainer has one group containing every parameter. A root parameter is
+    enumerated before child modules, so insert an empty state at its actual
+    position rather than shifting the old moments onto different parameters.
+    Other optimizer layouts remain subject to PyTorch's normal validation.
+    """
+    names = list(dict(net.named_parameters()))
+    missing = [n for n in names if n in ('installed_enh_weight', 'refuel_weight') and n not in model]
+    if not missing:
+        return state
+    groups = state.get('param_groups', [])
+    if len(groups) != 1 or len(groups[0]['params']) != len(names) - len(missing):
+        return state
+    params = list(groups[0]['params'])
+    next_id = max(params, default=-1) + 1
+    for name in missing:
+        params.insert(names.index(name), next_id)
+        next_id += 1
+    return {**state, 'param_groups': [{**groups[0], 'params': params}]}
+
+
 def apply_model_options(net: "ToolsNet", state: dict | None) -> dict:
     options = {k: bool(((state or {}).get("model_options") or {}).get(k, False)) for k in MODEL_OPTIONS}
+    if options["smooth_verb_floor"] and net.decoder != "units":
+        raise ValueError("Smooth verb distribution requires the units decoder")
+    if options["upgrade_floor_free"] and not options["smooth_verb_floor"]:
+        raise ValueError("upgrade_floor_free requires the smooth verb distribution")
     for k, v in options.items():
         setattr(net, k, v)
     return options
@@ -1161,6 +1350,10 @@ def collate(observations: list[dict], device) -> dict:
         return arr
 
     for key in TOKEN_KEYS:
+        if key in ('token_enhancements', 'token_refueling', 'load_subject_class', 'load_target_class') and not all(key in o for o in observations):
+            # Legacy policies may still consume old inputs. An enabled policy
+            # fails explicitly in encode rather than silently losing its input.
+            continue
         out[key] = pad(key, T, 0)
     for key in TOKEN_T_KEYS:
         out[key] = pad(key, T, 1)

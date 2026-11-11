@@ -368,7 +368,22 @@ class Trainer:
         plan_mark = (t0, self.update)
         stop_file = self.run_dir / "STOP"
         stop_reason = None
+        # FA_ENV_DRAIN_FILE (the player's PAUSE): while it says "rl_loop: learning", no new game of this evaluation
+        # starts; the running ones finish and the round ends short (2026-11-10: a round is about 150 games and two
+        # hours, too long to wait for at a round's end)
+        drain_file = os.environ.get("FA_ENV_DRAIN_FILE")
+        drain_check = 0.0
         while True:
+            if drain_file and mode == "eval" and self.eval_queue and time.monotonic() - drain_check > 20:
+                drain_check = time.monotonic()
+                try:
+                    with open(drain_file, encoding="utf-8", errors="replace") as f:
+                        draining = f.read(64).startswith("rl_loop: learning")
+                except OSError:
+                    draining = False
+                if draining:
+                    print(f"learning pause: {len(self.eval_queue)} games of this round not started", flush=True)
+                    self.eval_queue.clear()
             if stop_at and datetime.now() >= stop_at:
                 stop_reason = "stop time"
             elif stop_file.exists():

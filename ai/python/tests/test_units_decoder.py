@@ -205,10 +205,11 @@ class VerbsAfterAttentionTest(unittest.TestCase):
         torch.testing.assert_close(lp, lp2)
 
     def test_the_option_travels_with_the_checkpoint(self):
-        self.assertEqual(tm.model_options(self.net), {"verbs_after_attention": False, "fine_positions": False})
+        defaults = {key: False for key in tm.MODEL_OPTIONS}
+        self.assertEqual(tm.model_options(self.net), defaults)
         self.net.verbs_after_attention = True
         state = {"model": self.net.state_dict(), "model_options": tm.model_options(self.net)}
         other = tm.ToolsNet("S", decoder="units")
-        self.assertEqual(tm.apply_model_options(other, state), {"verbs_after_attention": True, "fine_positions": False})
+        self.assertEqual(tm.apply_model_options(other, state), {**defaults, "verbs_after_attention": True})
         self.assertTrue(other.verbs_after_attention)
-        self.assertEqual(tm.apply_model_options(other, {"model": {}}), {"verbs_after_attention": False, "fine_positions": False})
+        self.assertEqual(tm.apply_model_options(other, {"model": {}}), defaults)

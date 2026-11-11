@@ -18,8 +18,9 @@ def write_round(root: Path, name: str, sha: str, games: list):
     (r / "eval").mkdir(parents=True)
     (r / "round.json").write_text(json.dumps({"checkpoint_sha256": sha}))
     (r / "eval" / "episodes.jsonl").write_text("\n".join(json.dumps(
-        {"ai": ai, "faction": f, "ai_faction": af, "map": "SCMP_012", "outcome": "victory" if won else "defeat"})
-        for ai, f, af, won in games))
+        {"ai": ai, "faction": f, "ai_faction": af, "map": "SCMP_012", "slots": [1, 2], "seed": i,
+         "outcome": "victory" if won else "defeat"})
+        for i, (ai, f, af, won) in enumerate(games)))
     (r / "DONE").write_text("x")
 
 

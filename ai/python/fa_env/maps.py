@@ -23,6 +23,12 @@ MAP_POOL: dict[str, dict] = {
     # 10 km, 2 players
     "SCMP_019": {"name": "Finn", "km": 10, "slots": [(1, 2), (2, 1)]},
     "SCMP_023": {"name": "Varga Pass", "km": 10, "slots": [(1, 2), (2, 1)]},
+    # 10 km, more start positions: the farthest balanced pairs, the other slots empty (2026-11-09: 10 km maps are where
+    # the network is weakest, and two maps were not enough variety)
+    "SCMP_017": {"name": "Syrtis Major", "km": 10, "slots": [(3, 4), (4, 3), (1, 2), (2, 1)]},
+    "X1MP_005": {"name": "The Dark Heart", "km": 10, "slots": [(1, 6), (6, 1), (3, 5), (5, 3), (2, 4), (4, 2)]},
+    "X1MP_006": {"name": "Daroza's Sanctuary", "km": 10, "slots": [(3, 4), (4, 3), (1, 2), (2, 1)]},
+    "X1MP_017": {"name": "Eye of the Storm", "km": 10, "slots": [(3, 4), (4, 3), (1, 2), (2, 1)]},
     # 20 km, 4 players: the farthest pairs
     "SCMP_003": {"name": "Drake", "km": 20, "slots": [(3, 4), (4, 3), (1, 2), (2, 1)]},
     "SCMP_004": {"name": "Emerald Crater", "km": 20, "slots": [(3, 4), (4, 3), (1, 2), (2, 1)]},

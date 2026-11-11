@@ -29,6 +29,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fa_env.refueling import enabled_observation
 from fa_env.record import read_blueprints, read_game  # noqa: E402
 from fa_env.observation_precision import CACHE_FLOAT_DTYPES, PRECISION_CONTRACT
 from fa_env.reclaim_memory import after_step as reclaim_after_step
@@ -45,13 +46,18 @@ K = MAX_COMMANDS
 CARRY_VERBS = SET_SUBJECT | {"commander_move", "commander_attack_move"}
 GAMMA = 0.997
 CACHE_SUFFIX = ".v3.npz"                     # observation encoding stays v3; unverified older artifacts are ignored
-CACHE_FORMAT = 12                             # fine pixels: usub, the map's fine split (11: danger maps)
+CACHE_FORMAT = 24                             # 24: explicit recorded probability semantics
+                                              # 23: placed mobile constructions and their teacher build labels
+                                              # 14: installed own-enhancement identities per token
+                                              # 13: deposit builds kept on fine maps, mass_capacity from mass_rate
+                                              # (12: fine pixels: usub, the map's fine split; 11: danger maps)
 # 10:                              # tokens carry the last order given to the unit (9: move-then-build)
 UNIT_LABEL_CAP = 128                          # units given a verb per decision in the labels; more: unknown
 LABELS = tuple(k for k in ACTION_KEYS if k != "set")           # one index per command slot
 # how the ragged arrays are stored: concatenated along their first axis, with per-step offsets
 DTYPES = {**CACHE_FLOAT_DTYPES, "token_bp": np.int16, "token_order": np.int8, "token_type": np.int8,
-          "token_last": np.int8,
+          "token_last": np.int8, "token_enhancements": np.int16,
+          "token_refueling": np.float32, "load_subject_class": np.int8, "load_target_class": np.int8,
           "cand_bp": np.int16, "cand_kind": np.int8, "enh_idx": np.int16,
           "can_build": np.int16, "can_enh": np.int16, "uverb": np.int8, **{k: np.int16 for k in UNIT_KEYS[1:]}}
 GROUPS = {"t": TOKEN_KEYS + tuple(k + "_t" for k in TOKEN_T_KEYS) + ("set_t",) + UNIT_KEYS, "c": CAND_KEYS,
@@ -197,6 +203,9 @@ def command_rejection_reason(c: dict, x: dict, look: dict, used: set | None = No
         row = TARGET_ROWS.index(TARGET_VERBS[verb])
         if i >= x["mask_target"].shape[1] or not x["mask_target"][row, i]:
             return "target_mask"
+        if verb == 'load' and x.get('refueling_enabled') and not shared_only:
+            if any(not (x['load_subject_class'][j] & x['load_target_class'][i]) for j in subj):
+                return 'load_pair_mask'
     return None
 
 
@@ -214,6 +223,10 @@ def partition_subjects(c: dict, x: dict, look: dict) -> tuple[dict | None, list,
         if i is None:
             missing.append(u)
         elif i < x["mask_subject"].shape[1] and x["mask_subject"][v, i]:
+            if c['verb'] == 'load' and x.get('refueling_enabled'):
+                target = index[c['target']]  # command-wide validation already checked it
+                if not (x['load_subject_class'][i] & x['load_target_class'][target]):
+                    continue
             if u not in present:
                 present.append(u)
     reason = None if present else ("subject_missing" if missing else "subject_mask")
@@ -284,8 +297,8 @@ def _merge_command_diagnostics(total: dict, part: dict) -> dict:
 
 
 def filter_commands(commands: list[dict], x: dict, look: dict | None = None,
-                    source: str = "unspecified") -> tuple[list[dict], dict]:
-    """Filter labels with stable per-reason counts; returned commands are the first K valid commands."""
+                    source: str = "unspecified", *, cap: bool = True) -> tuple[list[dict], dict]:
+    """Filter valid commands; slot labels retain their K limit, history may be uncapped."""
     look = look or lookups(x)
     diagnostics = _new_command_diagnostics(source)
     diagnostics["before_filter"] = len(commands)
@@ -328,7 +341,7 @@ def filter_commands(commands: list[dict], x: dict, look: dict | None = None,
     accepted = [c for group in groups for c in group]
     kept = []
     for group in groups:
-        if len(kept) + len(group) > K:
+        if cap and len(kept) + len(group) > K:
             break
         kept.extend(group)
     diagnostics["after_filter"] = len(accepted)
@@ -447,6 +460,19 @@ def supervise_recorded_step(step: dict, commands: list, retained: list) -> bool:
             (not step.get("sent") or bool(retained)))
 
 
+def replay_reclaim_memory(observer, step):
+    """Match ToolsEnv's scan/cap, then action-result removal/cap chronology.
+
+    Removing a failed target before the first cap incorrectly admits a lower
+    ranked prop that the live observer discarded. Even one extra token changes
+    indices and makes an otherwise valid recorded policy unusable.
+    """
+    observer.set_wrecks(reclaim_after_step(observer.wrecks,
+        step.get("queries") or [], step.get("answers") or []))
+    observer.set_wrecks(reclaim_after_step(observer.wrecks, [], [],
+        step.get("sent") or [], step.get("results") or []))
+
+
 def encode_game(path: Path, bps: dict) -> tuple[dict | None, dict]:
     hello, steps, end = read_game(path)
     diag = _new_command_diagnostics("recording_bc")
@@ -459,10 +485,13 @@ def encode_game(path: Path, bps: dict) -> tuple[dict | None, dict]:
     # a game the policy played while a teacher said what it would do (DAgger): the steps' `labels` are the
     # lesson, the played commands only keep the observer's bookkeeping as it was live
     teacher_labels = bool(meta.get("label_source"))
+    captured_ai = meta.get("capture") is True and not meta.get("shadow") and bool(meta.get("player_ai"))
     me = meta["me"]
     kit = ToolKit(info, bps)
     ob = ToolsObserver(info, bps, me, kit)
     rows, trade, income, bc_supervise, unit_supervise = [], [], [], [], []
+    refuel_supervise = []
+    factory_supervise = {"fu_": [], "rf_fu_": []}
     carry: list[dict] = []          # orders to units not observed yet, tried again at the next decision
     for st in steps:
         s, obs = st["step"], st["msg"]["obs"]
@@ -503,6 +532,24 @@ def encode_game(path: Path, bps: dict) -> tuple[dict | None, dict]:
         carry = [] if policy_labels or teacher_labels else carry_commands(cmds, x, look)
         lab = commands_to_indices(keep, x)
         lab.update(unit_labels(cmds, x, look))
+        rx = enabled_observation(x)
+        rlook = lookups(rx)
+        rkeep, _ = filter_commands(cmds, rx, rlook, source="recording_refuel_bc")
+        rlab = commands_to_indices(rkeep, rx)
+        rlab.update(unit_labels(cmds, rx, rlook))
+        lab.update({'rf_' + k: v for k, v in rlab.items()})
+        refuel_supervise.append(labelled and (should_supervise_commands(cmds, rkeep) if teacher_labels
+                                             else supervise_recorded_step(s, cmds, rkeep)))
+        from fa_env.factory_upgrades import enabled_observation as factory_view
+        for prefix, fx in (("fu_", factory_view(x)), ("rf_fu_", factory_view(rx))):
+            flook = lookups(fx)
+            fkeep, _ = filter_commands(cmds, fx, flook, source="recording_factory_bc")
+            flab = commands_to_indices(fkeep, fx)
+            flab.update(unit_labels(cmds, fx, flook))
+            lab.update({prefix + k: v for k, v in flab.items()})
+            factory_supervise[prefix].append(labelled and (
+                should_supervise_commands(cmds, fkeep) if teacher_labels
+                else supervise_recorded_step(s, cmds, fkeep)))
         unit_supervise.append(labelled and s.get("supervised") is not False
                               and not bool(s.get("teacher_interventions")))
         rows.append((x, lab, int(obs.get("tick", 0))))
@@ -511,17 +558,29 @@ def encode_game(path: Path, bps: dict) -> tuple[dict | None, dict]:
         trade.append(float(st_.get("Enemies_MassValue_Destroyed", 0)) - float(st_.get("Units_MassValue_Lost", 0)))
         income.append(float(((army.get("eco") or {}).get("mass") or {}).get("income", 0.0)))
         # what the acting side does after the decision (as ToolsEnv will do live)
-        ob.set_wrecks(reclaim_after_step(ob.wrecks, s.get("queries") or [], s.get("answers") or [],
-                                        s.get("sent") or [], s.get("results") or []))
+        replay_reclaim_memory(ob, s)
         for a in s.get("sent") or []:
             if a.get("type") == "build" and kit.role.get(a.get("bp")) in ("mex", "hydro"):
                 ob.claim(a["pos"][0], a["pos"][1], s["tick"])
-        if policy_labels or teacher_labels:
+        recorded_policy = s.get("policy")
+        actor_recorded = isinstance(recorded_policy, dict) and isinstance(recorded_policy.get("action"), dict)
+        if actor_recorded and not isinstance(s.get("commands"), list):
+            raise ValueError("Recorded neural policy requires explicit played commands for observer memory")
+        if policy_labels or teacher_labels or actor_recorded:
             # ToolsEnv notes every attempted policy command, including masked prefix
             # actions and intent suppressed by navigation deduplication/site reservation.
-            ob.note_commands(s.get("commands") or [] if teacher_labels else cmds, s["tick"], s.get("results"))
+            # A neural rollout without shadow labels still used ToolsEnv's actual
+            # commands/results. BC label provenance does not determine its history.
+            ob.note_commands(s.get("commands") or [] if teacher_labels or actor_recorded else cmds,
+                             s["tick"], s.get("results"))
         else:
-            ob.note_commands(keep, s["tick"])
+            # Captured AI demonstrations can issue more commands than the old
+            # slots decoder labels. Per-unit labels already retain those orders;
+            # the observer's memory must retain their valid history as well.
+            history = keep
+            if captured_ai and step_diag["overflow_past_k"]:
+                history, _ = filter_commands(cmds, x, look, source="captured_ai_history", cap=False)
+            ob.note_commands(history, s["tick"])
     # Older recordings lack commander damage and the exact terminal transition.
     # Preserve their approximate targets with explicit provenance; new recordings
     # use the actual live components at the same decision chronology.
@@ -548,6 +607,11 @@ def encode_game(path: Path, bps: dict) -> tuple[dict | None, dict]:
     out["reward_source"] = np.array(reward_source)
     out["tick"] = np.array([t for _, _, t in rows], np.int64)
     out["bc_supervise"] = np.asarray(bc_supervise, dtype=bool)
+    out['rf_bc_supervise'] = np.asarray(refuel_supervise, dtype=bool)
+    out['rf_unit_supervise'] = np.asarray(unit_supervise, dtype=bool)
+    for prefix, flags in factory_supervise.items():
+        out[prefix + "bc_supervise"] = np.asarray(flags, dtype=bool)
+        out[prefix + "unit_supervise"] = np.asarray(unit_supervise, dtype=bool)
     out["unit_supervise"] = np.asarray(unit_supervise, dtype=bool)   # per-unit labels have no lost turns
     out["command_diagnostics"] = np.array(json.dumps(diag, sort_keys=True))
     out["meta"] = np.array(json.dumps({**meta, "outcome": outcome, "minutes": end.get("minutes"),
@@ -696,8 +760,7 @@ def shaping_arrays(steps: list[dict], kit, bps: dict, me: int) -> dict:
         # reclaim bursts that make the recorded income jump by ~17/s from one decision to the next
         # the unit's actual output when the observation has it (pm: adjacency bonuses included, so a mass
         # storage beside a mex counts), else its blueprint's
-        capacity[i] = sum(float(u["pm"]) if u.get("pm") is not None else
-                          float((bps.get(u.get("bp")) or {}).get("massProduction") or 0.0) * float(u.get("frac", 1.0))
+        capacity[i] = sum(mass_rate(u, bps.get(u.get("bp")) or {})
                           for u in obs.get("units") or [] if u.get("army") == me)
         own_army = next((a for a in armies if a.get("index") == me), {})
         reclaimed[i] = float((own_army.get("stats") or {}).get("Economy_Reclaimed_Mass") or 0.0)
@@ -719,6 +782,34 @@ def shaping_arrays(steps: list[dict], kit, bps: dict, me: int) -> dict:
             stall[i] = (1.0 - e_inc / e_req) * float(ms.get("requested") or 0.0) * dt
     return {"phi_intel": intel, "phi_map": mapc, "waste": waste, "mass_capacity": capacity,
             "reclaimed_mass": reclaimed, "energy_stall": stall}
+
+
+UPGRADE_ORDER = 27              # EUnitCommandType Upgrade, as the bridge reports a unit's current order
+
+
+def mass_rate(u: dict, bp: dict) -> float:
+    """A unit's mass production per second for the economy reward: its actual output (adjacency included), except
+    that an upgrading unit's reading is FAF's inflated value -- then the blueprint's -- and never more than 1.6x the
+    blueprint (storage adjacency gives at most +50 %). 2026-10-17 review: upgrading extractors read 5-120x (an Aeon
+    T2 mex 731/s instead of 6/s); the capacity potential turned that into +-50..326 reward in one decision, ~98 % of
+    the per-decision reward energy of the training data."""
+    base = float(bp.get("massProduction") or 0.0)
+    if u.get("pm") is None:
+        return base * float(u.get("frac", 1.0))
+    if u.get("order") == UPGRADE_ORDER:
+        return base
+    pm = float(u["pm"])
+    return min(pm, 1.6 * base) if base > 0 else pm
+
+
+def recency_key(manifest: dict) -> tuple:
+    """Rounds by when they started (<lane>_<UTC start>), the games of a round in a fixed pseudo-random order. By
+    encoding time a newest-N cut kept a round's SHORTEST games: encode_parallel encodes the longest first
+    (2026-10-17 review: kept games at the window's edge 473 decisions on average, dropped ones 853)."""
+    rnd = Path(str(manifest.get("source_root") or "")).parent.name
+    start = rnd.split("_", 1)[1] if "_" in rnd else ""
+    h = hashlib.sha256(str(manifest.get("source_name")).encode()).hexdigest()
+    return (start, h) if start else (str(int(manifest.get("created_ns", 0))), h)
 
 
 def policy_arrays(steps: list[dict], xs: list[dict], fine: bool = False) -> dict:
@@ -753,11 +844,35 @@ def policy_arrays(steps: list[dict], xs: list[dict], fine: bool = False) -> dict
         ok = bool(p) and isinstance(p.get("action"), dict) and len(p.get("unit_logp") or []) == n
         if ok:
             try:
+                short = False
                 for entry in p["action"].get("units") or []:
+                    short = short or len(entry) < 1 + len(UNIT_KEYS)    # recorded before the fine head: no usub
                     for k, v in zip(UNIT_KEYS, entry[1:]):
                         row[k][entry[0]] = v
-                if fine and np.any((row["ucell"] >= 0) & (row["usub"] < 0)):
-                    ok = False
+                # A corrected observation can change an old action's support:
+                # NEEDMOBILEBUILD used to be misclassified as factory output.
+                # Its recorded produce probability is not a valid PPO sample
+                # for the spatial build action. Keep rewards, but omit that
+                # decision's policy sample rather than reinterpret the action.
+                blueprint = np.isin(row["uverb"], (V_INDEX["build"], V_INDEX["produce"]))
+                if blueprint.any():
+                    kinds = np.asarray(xs[i]["cand_kind"])
+                    idx = row["ubp"][blueprint]
+                    if np.any((idx < 0) | (idx >= len(kinds))):
+                        ok = False
+                    elif np.any((kinds[idx] == CAND_MOBILE) != (row["uverb"][blueprint] == V_INDEX["produce"])):
+                        ok = False
+                if fine:
+                    # a build on a mass/hydro deposit has a cell but by design no fine pixel (tools_model._fine:
+                    # cl & ~(bld & kind >= 2)); taken for "a network without the fine head", every mex/hydro decision
+                    # on the 10/20 km maps was thrown out of training since rl_079 (2026-10-17 review)
+                    dep = (row["uverb"] == V_INDEX["build"]) & (row["ubp"] >= 0)
+                    if dep.any():
+                        kinds = np.asarray(xs[i]["cand_kind"])
+                        idx = np.clip(row["ubp"][dep], 0, len(kinds) - 1)
+                        dep[dep] = (kinds[idx] >= 2) & (kinds[idx] != CAND_MOBILE)
+                    if short or np.any((row["ucell"] >= 0) & (row["usub"] < 0) & ~dep):
+                        ok = False
                 ulp[:] = np.asarray(p["unit_logp"], np.float32)
             except (IndexError, TypeError, ValueError):
                 ok = False
@@ -769,6 +884,11 @@ def policy_arrays(steps: list[dict], xs: list[dict], fine: bool = False) -> dict
         for k in UNIT_KEYS:
             rows[k].append(row[k])
         unit_lp.append(ulp)
+    from .probability_accounting import recording_semantics, recording_temperature
+    out["pol_logp_semantics"] = np.array(recording_semantics(policies))
+    temperature = recording_temperature(policies)
+    if temperature is not None:
+        out["pol_temperature"] = np.array(temperature, dtype=np.float64)
     out["pol_has"], out["pol_logp"], out["pol_value"] = has, logp, value
     for k in UNIT_KEYS:
         out[f"pol_{k}"] = np.concatenate(rows[k]).astype(DTYPES.get(k, np.int16))
@@ -797,6 +917,13 @@ def pack(xs: list[dict], labels: list[dict]) -> dict:
         out[k] = np.stack([x[k] for x in xs]).astype(DTYPES.get(k, xs[0][k].dtype))
     for k in LABELS:
         out[k] = np.stack([lab[k] for lab in labels])
+    for prefix in ('rf_', 'fu_', 'rf_fu_'):
+        if all(prefix + 'uverb' in lab for lab in labels):
+            out[prefix + 'set_t'] = np.concatenate([lab[prefix + 'set'].T for lab in labels])
+            for k in UNIT_KEYS:
+                out[prefix + k] = np.concatenate([lab[prefix + k] for lab in labels]).astype(DTYPES[k])
+            for k in LABELS:
+                out[prefix + k] = np.stack([lab[prefix + k] for lab in labels])
     return out
 
 
@@ -919,11 +1046,12 @@ def _write_cache_atomic(target: Path, arrays: dict) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def build_cache(raw: Path, cache: Path, log=print, files=None) -> dict:
+def build_cache(raw: Path, cache: Path, log=print, files=None, should_stop=None) -> dict:
     """Encode finished recordings in `raw`, or only the explicit paths in `files`.
 
     Blueprints are always read from `raw`; when `files` is passed, every recording must use that folder's
     blueprint table. Existing two-argument callers keep the full-folder behavior.
+    A stop callback is checked between games; an in-progress atomic cache write finishes.
     """
     cache.mkdir(parents=True, exist_ok=True)
     bps = {b["id"]: b for b in read_blueprints(raw)}
@@ -934,6 +1062,9 @@ def build_cache(raw: Path, cache: Path, log=print, files=None) -> dict:
     cut_off = []
     paths = sorted(Path(p) for p in files) if files is not None else sorted(raw.glob("*.jsonl.gz"))
     for path in paths:
+        if should_stop is not None and should_stop():
+            totals["cancelled"] = True
+            break
         manifest = _cache_manifest(path, blueprint_path, semantics)
         target = _cache_target(cache, path, manifest["key"])
         if target.exists():
@@ -1264,7 +1395,7 @@ class Games:
         if newest is not None:
             # an RL cache keeps every game ever encoded (3655 on 2026-10-11, ~30 MB each once loaded): loading all
             # of them to train on the newest few hundred ran the PC out of memory
-            latest = dict(sorted(latest.items(), key=lambda kv: int(kv[1][1].get("created_ns", 0)))[-newest:])
+            latest = dict(sorted(latest.items(), key=lambda kv: recency_key(kv[1][1]))[-newest:])
         selected = sorted((item[0] for item in latest.values()))
         manifests = {item[0]: item[1] for item in latest.values()}
         if max_games is not None:
@@ -1287,6 +1418,7 @@ class Games:
                 self.games.append({k: z[k] for k in z.files if k != "cache_manifest"})
                 self.games[-1]["_cache_manifest"] = json.loads(str(z["cache_manifest"].item()))
         self.lengths = np.array([len(g["returns"]) for g in self.games])
+        self.air_refueling = False
         self.units = False              # which decoder's turns count as supervised (set by train)
 
     @classmethod
@@ -1300,10 +1432,12 @@ class Games:
             self.games.append(g)
         self.lengths = np.array([len(g["returns"]) for g in self.games])
         self.units, self.folders = units, list(folders)
+        self.air_refueling = False
         return self
 
     WIDE = {"tokens": np.float32, "token_bp": np.int64, "token_order": np.int64, "token_type": np.int64,
-            "token_last": np.int64, "token_last_feat": np.float32,
+            "token_last": np.int64, "token_last_feat": np.float32, "token_enhancements": np.int64,
+            "token_refueling": np.float32, "load_subject_class": np.int64, "load_target_class": np.int64,
             "cand_feat": np.float32, "cand_bp": np.int64, "cand_kind": np.int64, "enh_idx": np.int64,
             "enh_feat": np.float32, "can_build": np.int64, "can_enh": np.int64, "map": np.float32}
 
@@ -1329,11 +1463,16 @@ class Games:
             for t in range(a, a + length):
                 obs.append(self.step_obs(g, t))
                 o, b = int(g["offsets_t"][t]), int(g["offsets_t"][t + 1])
-                labels.append({**{k: g[k][t] for k in LABELS},
-                               "set": g["set_t"][o:b].T, **{k: g[k][o:b] for k in UNIT_KEYS}})
+                from fa_env.factory_upgrades import label_prefix
+                prefix = label_prefix(self)
+                if prefix and prefix + 'uverb' not in g:
+                    raise ValueError('Optional capability labels require current cache format')
+                labels.append({**{k: g[prefix + k][t] for k in LABELS},
+                               "set": g[prefix + "set_t"][o:b].T,
+                               **{k: g[prefix + k][o:b] for k in UNIT_KEYS}})
                 starts.append(t == 0)
                 returns.append(g["returns"][t])
-                supervised.append(g["unit_supervise" if self.units else "bc_supervise"][t])
+                supervised.append(g[prefix + ("unit_supervise" if self.units else "bc_supervise")][t])
         b = collate(obs, device)
         T = b["tokens"].shape[1]
         lab = {}
@@ -1493,13 +1632,15 @@ class _Batches(torch.utils.data.IterableDataset):
     """Training batches built in loader processes (memory-mapped games only): building a batch is Python and
     numpy work on one core (~1 s for 640 decisions), slower than a small network's step on the GPU."""
 
-    def __init__(self, folders, units, ids, length, burn, batch_chunks, seed, weight=None):
-        self.args = (list(folders), units, list(ids), length, burn, batch_chunks, seed, weight)
+    def __init__(self, folders, units, ids, length, burn, batch_chunks, seed, weight=None, air_refueling=False, queued_factory_upgrades=False):
+        self.args = (list(folders), units, list(ids), length, burn, batch_chunks, seed, weight, air_refueling, queued_factory_upgrades)
 
     def __iter__(self):
-        folders, units, ids, length, burn, batch_chunks, seed, weight = self.args
+        folders, units, ids, length, burn, batch_chunks, seed, weight, air_refueling, queued_factory_upgrades = self.args
         info = torch.utils.data.get_worker_info()
         games = Games.reopen(folders, units)
+        games.air_refueling = air_refueling
+        games.queued_factory_upgrades = queued_factory_upgrades
         rng = np.random.default_rng([seed, info.id if info else 0])
         while True:
             yield games.batch(chunks(games, ids, length, rng, batch_chunks, burn, weight), length, "cpu")
@@ -1510,7 +1651,8 @@ def loader_batches(games: "Games", ids, length, burn, batch_chunks, seed, n: int
     if not games.folders:
         raise ValueError("loader processes need memory-mapped games (--mapped)")
     data = torch.utils.data.DataLoader(_Batches(games.folders, games.units, ids, length, burn, batch_chunks, seed,
-                                                weight),
+                                                weight, air_refueling=getattr(games, 'air_refueling', False),
+                                                queued_factory_upgrades=getattr(games, 'queued_factory_upgrades', False)),
                                        batch_size=None, num_workers=workers, prefetch_factor=2)
     to = lambda x: {k: v.to(device, non_blocking=True) for k, v in x.items()} if isinstance(x, dict) \
         else x.to(device, non_blocking=True)  # noqa: E731
@@ -1526,7 +1668,8 @@ def held_out_split(games: "Games", rng: np.random.Generator) -> tuple[list[int],
     round, 2026-10-06)."""
     order = rng.permutation(len(games.games))
     n_held = max(1, len(order) // 10)
-    key = "unit_supervise" if games.units else "bc_supervise"
+    from fa_env.factory_upgrades import label_prefix
+    key = label_prefix(games) + ("unit_supervise" if games.units else "bc_supervise")
     measurable = [int(i) for i in order
                   if games.games[i].get(key) is None or bool(np.asarray(games.games[i][key]).any())]
     held = sorted(measurable[:n_held])
@@ -1568,7 +1711,8 @@ def train(cache: Path, out: Path, size: str = "M", steps: int = 4000, length: in
           recent_weight: float = 1.0, builder_weight: float = 1.0, accumulate: int = 1,
           grad_checkpoint: bool = False, stop_file: Path | None = None, memory_fraction: float | None = 0.9,
           verbs_after_attention: bool | None = None, fine_positions: bool | None = None,
-          train_only: tuple | None = None) -> dict:
+          train_only: tuple | None = None, air_refueling: bool | None = None,
+          queued_factory_upgrades: bool | None = None) -> dict:
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     torch.manual_seed(seed)
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -1576,10 +1720,6 @@ def train(cache: Path, out: Path, size: str = "M", steps: int = 4000, length: in
     games = games or Games(cache)
     games.units = decoder == "units"
     rng = np.random.default_rng(seed)
-    held, train_ids = held_out_split(games, rng)
-    if not train_ids:
-        raise ValueError("BC training needs at least two games so one can be held out")
-    dataset_ret_std = float(np.concatenate([games.games[i]["returns"] for i in train_ids]).std() + 1e-6)
     initial = None
     if device.type == "cuda" and memory_fraction:
         # a batch that does not fit fails with an OutOfMemoryError instead of the driver thrashing at the limit
@@ -1610,6 +1750,16 @@ def train(cache: Path, out: Path, size: str = "M", steps: int = 4000, length: in
         net.verbs_after_attention = bool(verbs_after_attention)
     if fine_positions is not None:
         net.fine_positions = bool(fine_positions)
+    if air_refueling is not None:
+        net.air_refueling = bool(air_refueling)
+    if queued_factory_upgrades is not None:
+        net.queued_factory_upgrades = bool(queued_factory_upgrades)
+    games.air_refueling = bool(getattr(net, 'air_refueling', False))
+    games.queued_factory_upgrades = bool(getattr(net, 'queued_factory_upgrades', False))
+    held, train_ids = held_out_split(games, rng)
+    if not train_ids:
+        raise ValueError("BC training needs at least two games so one can be held out")
+    dataset_ret_std = float(np.concatenate([games.games[i]["returns"] for i in train_ids]).std() + 1e-6)
     log(f"model options: {model_options(net)}")
     ret_std, ret_std_source = select_return_scale(dataset_ret_std, initial)
     if train_only:                                       # the rest of the network stays as it is
@@ -1746,6 +1896,8 @@ def main():
                     help="units decoder: final verbs from the attended context (model option; kept once set)")
     ap.add_argument("--fine-positions", action="store_true",
                     help="units decoder: the fine pixel inside a chosen cell on large maps (model option)")
+    ap.add_argument("--air-refueling", action="store_true", help="own fuel input and typed air-staging actions")
+    ap.add_argument("--queued-factory-upgrades", action="store_true", help="legal upgrades behind one production order")
     ap.add_argument("--train-only", help="comma-separated parameter name prefixes: train only these (e.g. fine_)")
     a = ap.parse_args()
     caches = [Path(c) for c in a.cache]
@@ -1765,6 +1917,8 @@ def main():
                       stop_file=a.stop_file, memory_fraction=a.memory_fraction or None,
                       verbs_after_attention=True if a.verbs_after_attention else None,
                       fine_positions=True if a.fine_positions else None,
+                      air_refueling=True if a.air_refueling else None,
+                      queued_factory_upgrades=True if a.queued_factory_upgrades else None,
                       train_only=tuple(a.train_only.split(",")) if a.train_only else None)
         results[size] = {"params": state["params"], **state["best"]}
     report = Path(a.out).with_name("tools_bc_report.json")

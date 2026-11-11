@@ -7,18 +7,25 @@ It learned first by watching [M28AI](https://github.com/maudlin27/M28AI) play (M
 its decisions become labels), then improved by playing tens of thousands of games against scripted AIs, M28 at
 different strengths, and past versions of itself.
 
-**Where it stands** (network `models/rl_089.pt`, 1v1, 5–10 km maps):
+**Where it stands** (11 November 2026; 1v1, 5–10 km maps; win rates):
 
-| Opponent | Win rate |
-| --- | --- |
-| FAF's scripted AIs (adaptive, rush, tech) | ~89 % |
-| M28 at 0.55 cheat multiplier | ~75 % |
-| M28 at 0.6 | ~50 % |
-| M28 at 0.75 | ~20 % |
-| Full M28 | ~1 % |
+| Opponent | `rl_089` (October, in `models/`) | `rl_005` of the third run (now) |
+| --- | --- | --- |
+| FAF's scripted AIs (adaptive, rush, tech) | ~89 % | 90 % (375 games) |
+| M28 at 0.55 cheat multiplier | ~75 % | not measured |
+| M28 at 0.6 | ~50 % | not measured |
+| M28 at 0.75 | ~20 % | 47 % ±4 (739 games) |
+| M28 at 0.9 | not measured | 14 % ±4 (245 games) |
+| Full M28 | ~1 % | not measured |
 
-On 20 km maps it is still weak. It has seen about 30,000 games in total: ~7,400 of M28 for imitation, then
-~21,000 of its own over ~100 RL iterations.
+Each column was measured with that month's engine build and map pool, so the two are not a matched comparison.
+
+It has played about 145,000 recorded games. About 7,400 of them were M28's, for imitation; about 93,000 of its own
+went into RL training over 240 iterations. The server plays about 3,000 games a day.
+
+Its limits: it wins with one plan, a T1 army that has to break the opponent by about minute 20, and its economy
+rarely tiers up. On 20 km maps it is still weak (last measured in October). `ai/server/rl3/README.md` describes
+the current run.
 
 ## How it works
 

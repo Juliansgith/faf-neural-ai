@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from examples.tools_eval import schedule_rows
+from examples.tools_eval import schedule_rows, wants_labels
 from fa_train.learn_rl import map_km
 
 
@@ -30,6 +30,20 @@ class VariedConditionsTest(unittest.TestCase):
         self.assertEqual(rush, tech)                                   # paired within a round
         self.assertNotEqual(rush, [cond(r) for r in b if r["ai"] == "rush"])          # another round, other games
         self.assertGreater(len({c[2] for c in rush}), 1)               # not one faction
+
+
+class LabelsShareTest(unittest.TestCase):
+    def test_share(self):
+        rows = [{"ai": "rush", "map": "SCMP_012", "seed": s} for s in range(1000)]
+        self.assertTrue(all(wants_labels(r, None) for r in rows))
+        n = sum(wants_labels(r, 0.5) for r in rows)
+        self.assertTrue(420 < n < 580, n)
+        self.assertEqual([wants_labels(r, 0.5) for r in rows[:50]], [wants_labels(r, 0.5) for r in rows[:50]])
+
+    def test_large_maps_and_self_play_keep_them(self):
+        large = next(m for m, e in __import__("fa_env.maps", fromlist=["MAP_POOL"]).MAP_POOL.items() if e["km"] > 10)
+        self.assertTrue(all(wants_labels({"ai": "rush", "map": large, "seed": s}, 0.0) for s in range(50)))
+        self.assertTrue(all(wants_labels({"ai": "self@rl_089", "map": "SCMP_012", "seed": s}, 0.0) for s in range(50)))
 
 
 if __name__ == "__main__":

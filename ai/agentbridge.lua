@@ -410,6 +410,10 @@ local function DescribeOwnUnit(unit)
         d.paused = true
     end
     d.shield = ShieldValue(unit)
+    -- Own-unit information available to a player. Keep absent values absent
+    -- for units without a motion object; enemy descriptions never expose it.
+    d.fuel = Try(nil, unit.GetFuelRatio, unit)
+    d.fuel_use_time = Try(nil, unit.GetFuelUseTime, unit)
     if fine then Lap('own_state') end
     -- what a structure actually yields and costs right now: adjacency bonuses show up here
     if EntityCategoryContains(categories.STRUCTURE, unit) then
@@ -1028,6 +1032,9 @@ local CaptureSpecs = {
     IssueStop = { 'stop' }, IssueClearCommands = { 'clear' }, IssueDive = { 'dive' },
     IssueSiloBuildTactical = { 'silo_build' }, IssueSiloBuildNuke = { 'silo_build', nuke = true },
     IssueScript = { 'enhance', 'script' },
+    -- 2026-10-17 (bugs-env F2): M28 clears each new factory's queue (M28Factory) and teleports commanders; in
+    -- shadow mode both acted on the agent's army. 'teleport' is no command the agent mirrors (labels ignore it).
+    IssueClearFactoryCommands = { 'clear' }, IssueTeleport = { 'teleport', 'pos' },
 }
 
 -- Records an order another AI gives our army. Returns whether the order was for our army (also when it is
@@ -1127,17 +1134,20 @@ end
 -- M28 pauses and unpauses units itself (unit:SetPaused under a mass or energy stall): not an order, so the
 -- wrappers above do not see it. In shadow mode it would still act on the agent's army -- the agent's games
 -- would not be the agent's own. Its pause functions are looked up in its module at every call.
-local function ShadowM28Pauses()
-    if Capture.m28 then
-        return
-    end
-    Capture.m28 = true
-    local ok, mod = pcall(import, '/mods/M28AI/lua/AI/M28UnitInfo.lua')
+--
+-- 2026-10-17 (review bugs-env F2): the same for M28's other direct acts on a unit. M28Orders.IssueTrackedKillUnit
+-- clears the unit's orders (swallowed above) and then calls oUnit:Kill() itself: near the unit cap M28's
+-- CheckUnitCap culls engineers and T1/T2 land units every 0.5 s, and in shadow mode those were the agent's
+-- units (34 full-health vanishes per 100 decisions within 40 of the cap against 1.2 elsewhere, counted as our
+-- losses). Its weapon (hold fire), shield, intel, jamming, stealth, missile auto-build and weapon-priority
+-- helpers set unit state directly too. All take the unit first; only units of the shadowed armies
+-- (Bridge.armies) are spared -- M28 playing its own army (the opponent) is untouched.
+local function ShadowWrap(path, names)
+    local ok, mod = pcall(import, path)
     if not ok or type(mod) ~= 'table' then
         return
     end
-    for _, name in { 'ForkedPauseUnit', 'PauseOrUnpauseMassUsage', 'PauseOrUnpauseEnergyUsage',
-                     'PauseOrUnpauseUnitWithoutTracking' } do
+    for _, name in names do
         local f = rawget(mod, name)
         if type(f) == 'function' then
             mod[name] = function(oUnit, a, b, c, d)
@@ -1149,6 +1159,21 @@ local function ShadowM28Pauses()
             end
         end
     end
+end
+
+local function ShadowM28Pauses()
+    if Capture.m28 then
+        return
+    end
+    Capture.m28 = true
+    ShadowWrap('/mods/M28AI/lua/AI/M28UnitInfo.lua',
+        { 'ForkedPauseUnit', 'PauseOrUnpauseMassUsage', 'PauseOrUnpauseEnergyUsage',
+          'PauseOrUnpauseUnitWithoutTracking',
+          'DisableUnitWeapon', 'EnableUnitWeapon', 'DisableUnitShield', 'EnableUnitShield',
+          'DisableUnitIntel', 'EnableUnitIntel', 'DisableUnitJamming', 'EnableUnitJamming',
+          'DisableUnitStealth', 'EnableUnitStealth', 'SetUnitMissileAutoBuildStatus',
+          'SetUnitWeaponTargetPriorities' })
+    ShadowWrap('/mods/M28AI/lua/AI/M28Orders.lua', { 'IssueTrackedKillUnit' })
 end
 
 -- The orders recorded since the last call (and a fresh list).

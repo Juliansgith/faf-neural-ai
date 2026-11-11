@@ -1,0 +1,8 @@
+[Unit]
+Description=FA RL run report
+
+[Service]
+Type=oneshot
+User=agent
+WorkingDirectory=/home/agent/faf-neural-ai/ai/python
+ExecStart=/bin/bash -c '/home/agent/venv/bin/python -m fa_train.run_report --run /home/agent/fa/rl3 --home /home/agent/fa/player --days 7 --out /home/agent/fa/rl3/reports/$(date +%%F).md'

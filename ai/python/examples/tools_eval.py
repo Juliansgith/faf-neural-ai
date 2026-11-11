@@ -38,9 +38,23 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def wants_labels(row: dict, share: float | None) -> bool:
+    """Whether a scheduled game records a teacher's labels: all with no share; else large maps (imitated x4 there,
+    where M28 plays far better) and self-play always, the rest with probability `share` drawn from the game's seed
+    (the same draw for the same row every time). M28's shadow brain is ~20 % of a game's simulation."""
+    if share is None or share >= 1.0 or str(row.get("ai", "")).startswith("self@"):
+        return True
+    from fa_env.maps import MAP_POOL
+    if MAP_POOL.get(row.get("map"), {}).get("km", 5) > 10:
+        return True
+    import random
+    return random.Random(int(row.get("seed", 0)) * 31 + 7).random() < share
+
+
 def schedule_rows(ais: list[str], games, maps: list[str], ours: list[int],
                   theirs: list[int], minutes: float | None, seed_base: int,
-                  minutes_large: float | None = None, vary: bool = False) -> list[dict]:
+                  minutes_large: float | None = None, vary: bool = False,
+                  maps_by_ai: dict | None = None) -> list[dict]:
     """The same row index has identical conditions against every opponent. `games`: per opponent, an int for all
     or {opponent: count}. `vary`: each row's map, both factions and the start slots drawn from the round's seed
     (the same draw for a row index against every opponent); else the fixed walk below, the same every round --
@@ -50,8 +64,15 @@ def schedule_rows(ais: list[str], games, maps: list[str], ours: list[int],
 
     from fa_env.maps import MAP_POOL, MINUTES_BY_KM
 
+    # `maps_by_ai` ({opponent name or prefix: [maps]}, the player config's "ai_maps"; the exact name wins, then the
+    # longest matching prefix -- "m28aicheat@0.5" is also a prefix of "m28aicheat@0.55"):
+    # that opponent plays on its own maps (2026-11-11: the four new 10 km maps were 0-3 % wins against M28, games
+    # that teach little; they are learnt against the easy AIs and in self-play first).
+    all_maps = maps
     rows = []
     for ai in ais:
+        own = [ai] if ai in (maps_by_ai or {}) else [k for k in (maps_by_ai or {}) if ai.startswith(k)]
+        maps = list(maps_by_ai[max(own, key=len)]) if own else all_maps
         for i in range(games[ai] if isinstance(games, dict) else games):
             if vary:
                 rng = random.Random(seed_base * 7919 + i)
@@ -97,6 +118,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--checkpoint", type=Path, required=True)
     ap.add_argument("--run", type=Path)
+    ap.add_argument("--schedule-file", type=Path,
+                    help="frozen JSON schedule (rows field); overrides generated game conditions")
     ap.add_argument("--bin-dir", type=Path, help="FAF bin folder containing main.exe")
     ap.add_argument("--ai", default="easy", help="comma-separated opponents; name:count sets one opponent's games")
     ap.add_argument("--games", type=int, default=3, help="games per opponent")
@@ -123,6 +146,9 @@ def main() -> None:
                     help="self-play opponents ('self@<name>' in --ai): <name>.pt here (default: the checkpoint's "
                          "player home, <home>/rounds/<round>/network.pt -> <home>/league)")
     ap.add_argument("--build-budget", type=int, help="builds per decision (-1: no limit; default: the network's)")
+    ap.add_argument("--labels-share", type=float, default=None,
+                    help="with --labels: only this share of the small-map games records them (large maps and "
+                         "self-play always); also from a player round's config \"labels_share\"")
     ap.add_argument("--act-gather-ms", type=float, default=0.0,
                     help="decide for several games at once: gather observations this long (CPU players)")
     ap.add_argument("--act-min-batch", type=int, default=1, help="with --act-gather-ms: stop gathering at this many")
@@ -169,23 +195,62 @@ def main() -> None:
     if not checkpoint.is_file() or not engine.is_file():
         ap.error(f"checkpoint or engine missing: {checkpoint}, {engine}")
     vary = bool(args.vary_conditions)
-    if not vary and args.run is not None:      # a player round: <home>/rounds/<round>/eval, its config at <home>
+    labels_share = args.labels_share
+    maps_by_ai = None
+    if args.run is not None:                   # a player round: <home>/rounds/<round>/eval, its config at <home>
         cfg_path = Path(args.run).resolve().parents[2] / "config.json"
         try:
-            vary = bool(json.loads(cfg_path.read_text()).get("vary_conditions"))
-        except (OSError, ValueError, IndexError):
+            player_cfg = json.loads(cfg_path.read_text())
+            os.environ.setdefault("FA_ENV_DRAIN_FILE", str(cfg_path.parent / "PAUSE"))   # see trainer.run
+            vary = vary or bool(player_cfg.get("vary_conditions"))
+            if labels_share is None and player_cfg.get("labels_share") is not None:
+                labels_share = float(player_cfg["labels_share"])
+            if player_cfg.get("ai_maps") and not args.schedule_file:
+                maps_by_ai = {str(k): [m for m in str(v).split(",") if m] for k, v in player_cfg["ai_maps"].items()}
+                bad = sorted({m for v in maps_by_ai.values() for m in v if m not in MAP_POOL})
+                if bad or not all(maps_by_ai.values()):
+                    ap.error(f"config ai_maps: unknown map IDs {bad} or an empty list")
+        except (OSError, ValueError, IndexError, TypeError):
             pass
-    rows = schedule_rows(ais, counts, maps, ours, theirs, args.minutes, args.seed_base, minutes_large, vary)
+    rows = schedule_rows(ais, counts, maps, ours, theirs, args.minutes, args.seed_base, minutes_large, vary,
+                         maps_by_ai)
+    if args.schedule_file:
+        from fa_train.benchmark import validate_rows, schedule_hash
+        try:
+            frozen = json.loads(args.schedule_file.read_text(encoding="utf-8"))
+            rows = validate_rows(frozen["rows"])
+            if frozen.get("schedule_sha256") != schedule_hash(rows):
+                raise ValueError("schedule hash is missing or does not match its rows")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            ap.error(f"invalid frozen schedule: {exc}")
+        ais = list(dict.fromkeys(row["ai"] for row in rows))
     run = args.run or Path(__file__).resolve().parents[4] / "_runs" / f"tools_eval-{datetime.now():%Y%m%d-%H%M%S}"
     manifest = {"checkpoint": str(checkpoint), "checkpoint_sha256": sha256(checkpoint),
                 "engine": str(engine), "engine_sha256": sha256(engine),
                 "policy": args.mode if args.mode == "greedy" else
                 f"sample T={args.temperature} top_p={args.top_p}", "build_budget": args.build_budget,
                 "commander_greedy": bool(args.commander_greedy), "rows": rows}
+    if args.schedule_file:
+        manifest["schedule_sha256"] = schedule_hash(rows)
     python_root = Path(__file__).resolve().parents[1]
-    policy_sources = ("fa_train/tools_model.py", "fa_train/tools_trainer.py", "fa_train/worker.py", "fa_env/tools.py",
-                      "fa_env/tools_obs.py", "fa_env/tools_env.py")
+    # Include feature helpers as well as the main actor. New observation modules
+    # must not silently fall outside a frozen evaluation's source fingerprint.
+    policy_sources = tuple(sorted(path.relative_to(python_root).as_posix()
+                                  for package in ("fa_env", "fa_train")
+                                  for path in (python_root / package).rglob("*.py")))
     manifest["policy_source_sha256"] = {name: sha256(python_root / name) for name in policy_sources}
+    from fa_env.bridge import DEFAULT_SCRIPT, OVERRIDES_DIR, GameConfig, resolve_mods
+    from fa_train.benchmark import lua_tree_hash
+    mods = {name: folder for ai in ais for name, folder in resolve_mods(GameConfig(ai=ai.split('@')[0])).items()}
+
+    def game_sources():
+        return {"bridge_sha256": sha256(DEFAULT_SCRIPT), "hooks_sha256": lua_tree_hash(OVERRIDES_DIR),
+                "mods": {name: {"path": str(folder), "lua_sha256": lua_tree_hash(folder),
+                                "mod_info": (folder / "mod_info.lua").read_text(encoding='utf-8')}
+                         for name, folder in mods.items()}}
+
+    # Training rounds also need the actual opponent version for fair gating.
+    manifest["game_sources"] = game_sources()
     if args.dry_run:
         print(json.dumps(manifest, indent=2))
         return
@@ -195,12 +260,17 @@ def main() -> None:
     from fa_train.tools_trainer import ToolsConfig, ToolsTrainer
 
     run.mkdir(parents=True, exist_ok=True)
+    if args.schedule_file and any((run / name).exists() for name in ("eval_manifest.json", "episodes.jsonl")):
+        ap.error("a frozen evaluation needs a fresh run directory; refusing to mix checkpoints or results")
     (run / "eval_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
     size = saved.get("size", "M")
     cfg = ToolsConfig(run_dir=str(run), workers=args.workers, size=size, decoder=saved.get("decoder", "slots"),
                       eval_minutes=args.minutes or 30.0, eval_mode=args.mode, eval_temperature=args.temperature,
-                      eval_top_p=args.top_p, act_gather_ms=args.act_gather_ms, act_min_batch=args.act_min_batch)
+                      eval_top_p=args.top_p, act_gather_ms=args.act_gather_ms, act_min_batch=args.act_min_batch,
+                      # FA_ENV_ACT_BF16=1: the encoder in bfloat16, as the learner scores (2026-11-10: rl_004's
+                      # decisions move -0.009 log-probability, an iteration moves them -0.137)
+                      amp_encoder=os.environ.get("FA_ENV_ACT_BF16") == "1")
     trainer = ToolsTrainer(cfg, device=args.device)
     trainer.load(checkpoint, optimizer=False)
     if args.build_budget is not None:
@@ -213,7 +283,7 @@ def main() -> None:
             trainer.schedule_eval(len(selection), ai)
             for episode, row in zip(trainer.eval_queue[offset:], selection):
                 episode.update(row)
-                episode["tag"] = "paired-greedy-eval"
+                episode["tag"] = "frozen-schedule-eval" if args.schedule_file else f"paired-{args.mode}-eval"
                 if args.watch:
                     episode["watch"] = True
                 if args.watch or args.debug:
@@ -225,11 +295,31 @@ def main() -> None:
                     episode["opponent_top_p"] = args.top_p
                 if args.record:
                     episode["record_dir"] = str(args.record.resolve())
-                if args.labels:
+                if args.labels and wants_labels(row, labels_share):
                     episode["labels"] = args.labels
-        trainer.run("eval")
+        if os.environ.get("FA_ENV_DRAIN_FILE") and not args.schedule_file:
+            import random
+            random.Random(args.seed_base).shuffle(trainer.eval_queue)
+        run_summary = trainer.run("eval")
         result = {"summary": by_ai(trainer.eval_results), "games": trainer.eval_results}
         (run / "eval_results.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        if args.schedule_file:
+            from fa_train.benchmark import summarize
+            accounting = summarize(rows, trainer.eval_results)
+            accounting["provenance_unchanged"] = (
+                sha256(checkpoint) == manifest["checkpoint_sha256"]
+                and sha256(engine) == manifest["engine_sha256"]
+                and {name: sha256(python_root / name) for name in policy_sources} == manifest["policy_source_sha256"]
+                and game_sources() == manifest["game_sources"])
+            # The trainer retries crashed evaluation episodes. Final successful
+            # rows alone conceal those attempts, potentially selecting outcomes.
+            accounting["restarted_attempts"] = int(run_summary.get("restarts", 0))
+            accounting["evaluation_valid"] = (accounting["complete"] and accounting["provenance_unchanged"]
+                                                and accounting["restarted_attempts"] == 0)
+            accounting["statistical_threshold_met"] &= accounting["evaluation_valid"]
+            (run / "benchmark.json").write_text(json.dumps(accounting, indent=2), encoding="utf-8")
+            if not accounting["evaluation_valid"]:
+                raise RuntimeError("incomplete, retried, or source-changing frozen evaluation; see benchmark.json")
         print(json.dumps(result["summary"], indent=2))
         print(telemetry_line(run / "episodes.jsonl"))
     finally:

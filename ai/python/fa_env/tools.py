@@ -84,6 +84,8 @@ BUILD_QUEUE_CAP = 3                  # orders a builder at work may hold before 
 # which building a new one should touch for its adjacency bonus, best first (by role, see `role_of`)
 ANCHOR_PREFERENCE = {"mass_storage": ("mex",), "energy_storage": ("power", "hydro"),
                      "power": ("land_factory", "air_factory", "naval_factory", "point_defense", "aa_defense", "radar")}
+# the commander leash (ToolKit.set_commander_leash) applies on maps above 10 km only (1 km = 51.2 game units)
+LEASH_MIN_UNITS = 10 * 51.2
 
 
 def cats(bp: dict) -> set:
@@ -177,8 +179,13 @@ def role_of(bp: dict) -> str | None:
     return "mobile"
 
 
+def requires_placement(bp: dict) -> bool:
+    """Structures and engineer-built mobile units use IssueBuildMobile at a site."""
+    return bool(cats(bp) & {"STRUCTURE", "NEEDMOBILEBUILD"})
+
+
 def placement_class(bp: dict) -> int:
-    """Where a structure of this blueprint goes: index into PLACEMENT_CLASSES."""
+    """Where a placed construction goes: index into PLACEMENT_CLASSES."""
     c = cats(bp)
     if "MASSEXTRACTION" in c:
         return 2
@@ -211,12 +218,37 @@ def adjacent(a: tuple, b: tuple) -> bool:
     return False
 
 
+TACTICAL_ENHANCEMENTS = frozenset({"TacticalMissile", "Missile"})      # UEF commander; Seraphim (support) commander
+NUKE_ENHANCEMENTS = frozenset({"TacticalNukeMissile"})                  # UEF commander (the billy)
+
+
+def silo_weapon(w: dict) -> bool:
+    """A weapon whose missiles are built in a silo (blueprint WeaponCategory 'Missile'; older blueprint dumps
+    without the category: an indirect-fire weapon labelled as a missile)."""
+    if w.get("category") is not None:
+        return w["category"] == "Missile"
+    return w.get("rangeCategory") == "UWRC_IndirectFire" and "missile" in str(w.get("label") or "").lower()
+
+
 def silo_kinds(unit: dict, bp: dict) -> set:
     """Which missiles a unit can build: 'tactical' and/or 'nuke' (launchers, and commanders with the missile
     enhancements)."""
     c, enh = cats(bp), set(unit.get("enh") or [])
     out = set()
-    if "TACTICALMISSILEPLATFORM" in c or ("SILO" in c and "NUKE" not in c) or enh & {"TacticalMissile", "Missile"}:
+    if "COMMAND" in c or "SUBCOMMANDER" in c:
+        # A (support) commander's blueprint lists every weapon its enhancements can add, and UEF/Seraphim ones carry
+        # the SILO category from the start: the category made silo_build legal for every UEF and Seraphim commander
+        # at minute 0 (295 no-op silo builds in 60 games, bugs-env F3, 2026-10-17). The launcher comes with the
+        # enhancement, and only a silo weapon of the blueprint counts: the Cybran support commander's
+        # NaniteMissileSystem is an anti-air launcher (weapon NMissile, category 'Anti Air' on the run's blueprints),
+        # nothing to build.
+        if any(silo_weapon(w) for w in bp.get("weapons") or []):
+            if enh & TACTICAL_ENHANCEMENTS:
+                out.add("tactical")
+            if enh & NUKE_ENHANCEMENTS:
+                out.add("nuke")
+        return out
+    if "TACTICALMISSILEPLATFORM" in c or ("SILO" in c and "NUKE" not in c) or enh & TACTICAL_ENHANCEMENTS:
         out.add("tactical")
     if ("NUKE" in c and "SILO" in c) or "TacticalNukeMissile" in enh:
         out.add("nuke")
@@ -254,6 +286,32 @@ class ToolKit:
         self.bps = blueprints
         self.deposits = [(float(d["x"]), float(d["z"]), d["type"]) for d in m.get("deposits", [])]
         self.role = {bp_id: role_of(bp) for bp_id, bp in blueprints.items()}
+        self.leash: tuple | None = None          # (x, z, radius): set_commander_leash; None: off (the default)
+
+    def set_commander_leash(self, start, enemy_start, fraction: float) -> None:
+        """An option, off by default: on maps above LEASH_MIN_UNITS the commander's own moves (commander_move,
+        commander_attack_move) end at most `fraction` of the start-to-start distance from our start; a cell
+        beyond is walked to the leash's edge on the line from our start. 2026-10-16 (architecture review P2a): on
+        20 km the policy sent its commander into the forward half 55-59 % of the time against M28's 31-34 % in
+        the same states, and 69-81 % of the large-map defeats ended with it past halfway while economy and army
+        were level or ahead. 0.5 keeps most of M28's own moves (p50 0.33, p75 0.58 of the distance). It is a
+        rule of the game the network plays, not of the network: the choice and its probability are unchanged, so
+        recorded log-probabilities stay exact."""
+        d = math.hypot(enemy_start[0] - start[0], enemy_start[1] - start[1])
+        if fraction and fraction > 0 and max(self.width, self.height) > LEASH_MIN_UNITS and d > 0:
+            self.leash = (float(start[0]), float(start[1]), float(fraction) * d)
+        else:
+            self.leash = None
+
+    def leashed(self, pos) -> list:
+        """A commander destination inside the leash (unchanged when it is off or the point is inside)."""
+        if self.leash is None:
+            return list(pos)
+        sx, sz, r = self.leash
+        d = math.hypot(pos[0] - sx, pos[1] - sz)
+        if d <= r:
+            return list(pos)
+        return [sx + (pos[0] - sx) * r / d, sz + (pos[1] - sz) * r / d]
 
     # ------------------------------------------------------------------ geometry
     def cell(self, x: float, z: float) -> tuple[int, int]:
@@ -450,7 +508,7 @@ class ToolKit:
                 pending.append((subject[0], bp, 2 if partners else 1, clear, True))
             elif verb == "produce":
                 bp = c.get("bp")
-                if one and bp in build_options(one, self.bps):
+                if one and bp in build_options(one, self.bps) and not requires_placement(self.bps.get(bp, {})):
                     actions.append({"type": "factory_build", "units": subject[:1], "bp": bp,
                                     "count": int(c.get("count") or 1)})
             elif verb == "upgrade":         # a factory's chosen upgrade, else the blueprint's one
@@ -475,7 +533,7 @@ class ToolKit:
                 pending.append((tuple(subject), (RECLAIM, centre), 1, False, True))
             elif verb in ("commander_move", "commander_attack_move"):
                 actions.append({"type": verb.replace("commander_", ""), "units": subject[:1],
-                                "pos": list(self.where(c["cell"], c.get("sub")))})
+                                "pos": self.leashed(self.where(c["cell"], c.get("sub")))})
             elif verb == "unload":
                 actions.append({"type": "transport_unload", "units": subject[:1],
                                 "pos": list(self.where(c["cell"], c.get("sub")))})

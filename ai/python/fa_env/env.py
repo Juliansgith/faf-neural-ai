@@ -157,7 +157,7 @@ class FAEnv:
         self.info["log_path"] = str(self.game.log_path)
         self.game.loaded = True
         try:        # a safety net against one-CPU main threads (see unpin_threads)
-            self.info["unpinned_threads"] = unpin_threads(self.game.process.pid)
+            self.info["unpinned_threads"] = unpin_threads(self.game.process.pid, self.game.init_path.name)
         except Exception as exc:        # never worth failing a game over
             self.info["unpin_error"] = repr(exc)
         if self.config.minimized:       # the sim is running, so the D3D device exists: safe to minimize now

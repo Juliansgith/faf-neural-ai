@@ -34,6 +34,23 @@ class ToolsEvalScheduleTest(unittest.TestCase):
                              [1, 2, 3, 4], [1, 2, 3, 4], None, 900000)
         self.assertEqual(len({(r["map"], r["faction"], r["slots"]) for r in rows}), 16)
 
+    def test_an_opponent_can_have_its_own_maps(self):
+        rows = schedule_rows(["m28aicheat@0.75", "rush", "self@rl_000"], 40, ["SCMP_016", "SCMP_017"], [1, 2], [1, 2],
+                             None, 5000, vary=True, maps_by_ai={"m28": ["SCMP_016"], "rush": ["SCMP_017"]})
+        by_ai = {ai: {r["map"] for r in rows if r["ai"] == ai} for ai in ("m28aicheat@0.75", "rush", "self@rl_000")}
+        self.assertEqual(by_ai["m28aicheat@0.75"], {"SCMP_016"})
+        self.assertEqual(by_ai["rush"], {"SCMP_017"})
+        self.assertEqual(by_ai["self@rl_000"], {"SCMP_016", "SCMP_017"})
+        self.assertEqual(len(rows), 120)
+
+    def test_an_exact_opponent_name_comes_before_a_prefix(self):
+        maps_by_ai = {"m28aicheat@0.5": ["SCMP_019"], "m28aicheat@0.55": ["SCMP_016"], "m28aicheat": ["SCMP_017"]}
+        ais = ["m28aicheat@0.5", "m28aicheat@0.55", "m28aicheat@0.7"]
+        rows = schedule_rows(ais, 20, ["SCMP_012"], [1, 2], [1, 2], None, 5000, vary=True, maps_by_ai=maps_by_ai)
+        by_ai = {ai: {r["map"] for r in rows if r["ai"] == ai} for ai in ais}
+        self.assertEqual(by_ai, {"m28aicheat@0.5": {"SCMP_019"}, "m28aicheat@0.55": {"SCMP_016"},
+                                 "m28aicheat@0.7": {"SCMP_017"}})
+
 
 if __name__ == "__main__":
     unittest.main()

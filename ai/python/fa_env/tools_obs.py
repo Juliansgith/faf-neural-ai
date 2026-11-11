@@ -21,10 +21,12 @@ import math
 
 import numpy as np
 from .blueprint_vocab import blueprint_indices
+from .refueling import observation_fields
 
-from .tools import (GRID, fine_split, N_OPTIONS, N_TOGGLES, PLACEMENT_CLASSES, SET_SUBJECT, SILO_KINDS, SINGLE_SUBJECT,
-                    TARGET_ROWS, TARGET_VERBS, VERBS, ToolKit, available_enhancements, build_options, cats, combat_weapons,
-                    placement_class, silo_kinds, skirt_rect)
+from .tools import (BUILDING_ORDERS, GRID, fine_split, N_OPTIONS, N_TOGGLES, PLACEMENT_CLASSES, REPLACE_VERBS,
+                    SET_SUBJECT, SILO_KINDS, SINGLE_SUBJECT, TARGET_ROWS, TARGET_VERBS, VERBS, ToolKit,
+                    available_enhancements, build_options, cats, combat_weapons, placement_class, requires_placement,
+                    silo_kinds, skirt_rect)
 
 assert TARGET_ROWS == ("enemy", "own", "damaged", "wreck", "transport")      # the rows `_masks` fills
 
@@ -51,10 +53,11 @@ N_STATIC = 26
 # blueprint candidates: stats + build time and energy + how many we have + where it goes (4 classes or mobile)
 MAX_CANDIDATES = 128
 N_CAND_FEATURES = N_STATIC + 3 + len(PLACEMENT_CLASSES) + 1
-CAND_MOBILE = len(PLACEMENT_CLASSES)   # cand_kind of a mobile unit (produced by a factory, not placed)
+CAND_MOBILE = len(PLACEMENT_CLASSES)   # factory output; NEEDMOBILEBUILD units instead have a placement class
 # enhancement candidates: cost, time, what it gives, slot, whether it replaces the one in its slot
 MAX_ENHANCEMENTS = 48
 ENH_SLOTS = ("LCH", "RCH", "Back")
+MAX_INSTALLED_ENHANCEMENTS = len(ENH_SLOTS)
 N_ENH_FEATURES = 5 + len(ENH_SLOTS) + 1 + 2
 # which arrays are per token, per candidate, per step (the BC cache and collate use these)
 # token_last: the verb of the last order the acting side gave the unit (0: none yet); token_last_feat: where
@@ -62,7 +65,7 @@ N_ENH_FEATURES = 5 + len(ENH_SLOTS) + 1 + 2
 # current command type, not what it is building, reclaiming or heading for or who gave it: M28 keeps that in its
 # assignment tables, and a clone deciding per unit must see it too (2026-10-06).
 N_LAST_FEATURES = 3
-TOKEN_KEYS = ("tokens", "token_bp", "token_order", "token_type", "token_last", "token_last_feat", "mask_anchor",
+TOKEN_KEYS = ("tokens", "token_bp", "token_order", "token_type", "token_last", "token_last_feat", "token_enhancements", "token_refueling", "load_subject_class", "load_target_class", "mask_anchor",
               "mask_silo", "mask_toggle")
 TOKEN_T_KEYS = ("mask_subject", "mask_target")          # [rows, T]
 CAND_KEYS = ("cand_bp", "cand_feat", "cand_kind")
@@ -129,7 +132,7 @@ class ToolsObserver:
         self.zero_static = np.zeros(N_STATIC, np.float32)
         self.is_mobile = {i: "MOBILE" in cats(bp) for i, bp in blueprints.items()}
         self.is_structure = {i: "STRUCTURE" in cats(bp) for i, bp in blueprints.items()}
-        self.place_class = {i: placement_class(bp) for i, bp in blueprints.items() if "STRUCTURE" in cats(bp)}
+        self.place_class = {i: placement_class(bp) for i, bp in blueprints.items() if requires_placement(bp)}
         # what the mask builder asks of a blueprint, once per blueprint instead of once per unit per decision
         self.flags = {i: self._flags(bp) for i, bp in blueprints.items()}
         self.threat = {i: _threat_profile(bp) for i, bp in blueprints.items()}
@@ -200,11 +203,22 @@ class ToolsObserver:
         self.wrecks: list[dict] = []
         self.last_pos: dict[str, tuple] = {}
         self.taken: set = set()
+        # own ids of the last observation: the engine gives a dead unit's id to a new unit 10-40 s later (bugs-env
+        # F1, 2026-10-17: 52 % of new own units started with a dead unit's last order, target and command age)
+        self.own_ids: set = set()
+        # own units at a build in the last observation: the executor leaves them out of replacing orders and STOP
+        # (ToolKit.plan), so those orders are not theirs
+        self.building: set = set()
 
     # ------------------------------------------------------------------ updates from the acting side
     def note_commands(self, commands: list[dict], tick: int, results: list | None = None) -> None:
         for c in commands:
             v = V_INDEX.get(c.get("verb"))
+            # a unit at a build finishes it: ToolKit.plan drops it from replacing verbs and STOP, so it was not
+            # ordered (bugs-env L1, 2026-10-17: 43 % of capture, 15 % of repair, 10 % of assist commands; the
+            # unit's last order then said "capture" while it kept building). The same live and offline: both
+            # call this right after observe() on the observation the plan used.
+            dropped = self.building if (c.get("verb") in REPLACE_VERBS or c.get("verb") == "stop") else ()
             at = None
             cell = c.get("cell")
             if cell is not None and len(cell) == 2:
@@ -216,6 +230,8 @@ class ToolsObserver:
                 p = self.last_pos.get(str(c["anchor"]))
                 at = (p[0], p[1]) if p else None
             for u in c.get("subject") or []:
+                if str(u) in dropped:
+                    continue
                 self.commanded[str(u)] = tick
                 if v is not None:
                     self.last_order[str(u)] = (v, at)
@@ -251,12 +267,25 @@ class ToolsObserver:
         for u in obs.get("units", []):
             if u.get("army") == self.me:
                 own.append(u)
+            elif relation.get(u.get("army"), "enemy") != "enemy":
+                # allies and neutral civilians, also as radar contacts and remembered structures: the bridge sends
+                # ghosts of every army that is not ours. Taken before this test, 47 of the 48 remembered-structure
+                # tokens on Drake's Ravine were civilian walls (bugs-env F5, 2026-10-17)
+                continue
             elif u.get("radar"):
                 radar.append(u)
             elif u.get("ghost"):
                 ghost.append(u)
-            elif relation.get(u.get("army"), "enemy") == "enemy":
+            else:
                 enemy.append(u)
+        # a recycled id is a new unit: it has no orders yet (bugs-env F1). Live and offline alike, note_commands
+        # runs after observe, so a new unit ordered in this decision keeps that order.
+        now_ids = {str(u["id"]) for u in own}
+        for uid in now_ids - self.own_ids:
+            self.commanded.pop(uid, None)
+            self.last_order.pop(uid, None)
+        self.own_ids = now_ids
+        self.building = {str(u["id"]) for u in own if u.get("order") in BUILDING_ORDERS}
         # deposits and who holds them
         holders = {}
         for group, who in ((own, 1), (enemy, 2), (ghost, 2)):
@@ -278,10 +307,10 @@ class ToolsObserver:
             spots.append({"x": x, "z": z, "type": t, "who": who, "claimed": claimed})
         self.taken = taken
 
-        # tokens, in fixed type order with per-type caps
+        # tokens, in fixed type order with per-type caps; past a type's cap the ones that matter most (_capped)
         rows: list[tuple[int, dict]] = []
         for ttype, group in ((T_OWN, own), (T_ENEMY, enemy), (T_GHOST, ghost), (T_RADAR, radar)):
-            rows += [(ttype, u) for u in group[: CAPS[ttype]]]
+            rows += [(ttype, u) for u in self._capped(ttype, group, own)]
         rows += [(T_MASS, s) for s in spots if s["type"] == "mass"][: CAPS[T_MASS]]
         rows += [(T_HYDRO, s) for s in spots if s["type"] != "mass"][: CAPS[T_HYDRO]]
         rows += [(T_WRECK, w) for w in self.wrecks]
@@ -290,6 +319,7 @@ class ToolsObserver:
         feats = np.zeros((n, N_FEATURES), np.float32)
         last = np.zeros(n, np.int64)
         last_feat = np.zeros((n, N_LAST_FEATURES), np.float32)
+        installed_enh = np.zeros((n, MAX_INSTALLED_ENHANCEMENTS), np.int64)
         bp_idx = np.zeros(n, np.int64)
         orders = np.zeros(n, np.int64)
         types = np.zeros(n, np.int64)
@@ -328,6 +358,10 @@ class ToolsObserver:
                     f[51], f[52], f[53] = (x - prev[0]) / dt / 20.0, (z - prev[1]) / dt / 20.0, 1.0
                 seen_now[uid] = (x, z, tick)
                 if t == T_OWN:
+                    # Own upgrades are player-visible. Do not expose an enemy's
+                    # private enhancement table, even if a recording contains it.
+                    names = sorted(set(u.get('enh') or []))[:MAX_INSTALLED_ENHANCEMENTS]
+                    installed_enh[i, :len(names)] = [self.enh_vocab.get(name, 0) for name in names]
                     f[15] = float(bool(u.get("idle")))
                     f[16] = float(u.get("work") or 0.0)
                     f[17] = min(float(u.get("queue") or 0), 10.0) / 10.0
@@ -403,9 +437,13 @@ class ToolsObserver:
                              [float(self.bps.get(u.get("bp"), {}).get("vision") or 20.0) for u in own], tick)
         planes = np.zeros((len(MAP_CHANNELS), GRID, GRID), np.float32)
         planes[0:5] = self.static_map
-        for t, u in rows:
-            if t > T_RADAR:
-                continue
+        # the unit planes and danger maps count every unit, not only those with a token: past the token caps the
+        # hidden units vanished from them too (architecture review F3 / B19, 2026-10-17: in the 3-9 % of decisions
+        # with more than 128 seen enemies the danger map under-reported the biggest fights; on 20 km 83 % of the
+        # remembered structures were missing from the plane)
+        everyone = [(T_OWN, u) for u in own] + [(T_ENEMY, u) for u in enemy] + \
+                   [(T_GHOST, u) for u in ghost] + [(T_RADAR, u) for u in radar]
+        for t, u in everyone:
             gx, gz = self.kit.cell(u["x"], u["z"])
             structure = self.is_structure.get(u.get("bp"), False)
             if t == T_OWN:
@@ -423,7 +461,7 @@ class ToolsObserver:
         planes[12] = self.enemy_memory / 8.0
         planes[13:15] = self.start_maps
         planes[15] = self.buildable
-        planes[16:21] = self._danger(rows)
+        planes[16:21] = self._danger(everyone)
 
         # scalars
         me_army = next((a for a in obs.get("armies", []) if a.get("index") == self.me), {})
@@ -471,7 +509,8 @@ class ToolsObserver:
         clean = lambda a: np.clip(np.nan_to_num(a, nan=0.0, posinf=50.0, neginf=-50.0), -50.0, 50.0)  # noqa: E731
         out = {
             "tokens": clean(feats), "token_bp": bp_idx, "token_order": orders, "token_type": types,
-            "token_last": last, "token_last_feat": last_feat,
+            "token_last": last, "token_last_feat": last_feat, "token_enhancements": installed_enh,
+            **observation_fields(rows, self.bps),
             "map": clean(planes), "scalars": clean(scalars),
             "privileged": clean(np.concatenate([mine, theirs])), "belief": clean(theirs),
             # fine pixels per cell side (fa_env.tools.fine_split: 1 on a 5 km map) and the map's size
@@ -482,6 +521,38 @@ class ToolsObserver:
         }
         out["ids"] = ids
         return out
+
+    def _capped(self, ttype: int, group: list, own: list) -> list:
+        """A token type's units, at most its cap. Under the cap: all of them in the bridge's order (unchanged).
+        Over it, the cap used to keep the first in the engine's list order, i.e. whichever came first, not the ones
+        that matter (B19, 2026-10-17). Now: our units that can act first (stable: the commander, an early unit,
+        stays in front), structures that take no orders last; the enemy's (seen, radar, remembered) nearest to
+        our units first, the enemy's remembered structures before those of hostile civilians."""
+        cap = CAPS[ttype]
+        if len(group) <= cap:
+            return group
+        if ttype == T_OWN:
+            return sorted(group, key=lambda u: self.is_structure.get(u.get("bp"), False)
+                          and not self._builder(u.get("bp")) and not u.get("tml") and not u.get("nukes"))[:cap]
+        d = self._nearest_own(group, own)
+        if ttype == T_GHOST:
+            civilian = np.array([u.get("army") not in self.enemy_indices for u in group], np.float64)
+            order = np.lexsort((d, civilian))          # last key first: civilians last, then by distance
+        else:
+            order = np.argsort(d, kind="stable")
+        return [group[i] for i in order[:cap]]
+
+    def _nearest_own(self, units: list, own: list) -> np.ndarray:
+        """Each unit's squared distance to the nearest of our units (to our start when we have none)."""
+        ux = np.array([float(u["x"]) for u in units], np.float32)
+        uz = np.array([float(u["z"]) for u in units], np.float32)
+        ox = np.array([float(u["x"]) for u in own] or [self.start[0]], np.float32)
+        oz = np.array([float(u["z"]) for u in own] or [self.start[1]], np.float32)
+        d = np.full(len(units), np.inf, np.float32)
+        for i in range(0, len(ox), 256):                          # in blocks: a few hundred by a few hundred
+            d = np.minimum(d, ((ux[:, None] - ox[None, i:i + 256]) ** 2 +
+                               (uz[:, None] - oz[None, i:i + 256]) ** 2).min(1))
+        return d
 
     def _focus(self, rows: list, own: list, acu: dict | None) -> np.ndarray:
         """The close-ups' centres: our commander; our army (the mass-weighted centre of our mobile armed units,

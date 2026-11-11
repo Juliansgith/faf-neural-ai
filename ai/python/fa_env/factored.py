@@ -16,6 +16,7 @@ policy work from.
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -35,6 +36,7 @@ HEADS: dict[str, tuple[str, ...]] = {
 HEAD_NAMES = tuple(HEADS)
 BUILD_ORDER = 8          # EUnitCommandType BuildMobile, as the bridge reports a unit's current order
 ACU_DEPOSIT_RANGE = 35.0  # the commander takes deposits this near its start; engineers take the rest
+INCOME_WINDOW = 15        # decisions (30 s) of mass income behind the value advantage's income (_income)
 
 # Caps that keep early, random-ish policies from absurd spam; generous enough not to bind good play.
 CAPS = {"land_factory": 8, "air_factory": 4, "radar": 1, "point_defense": 8, "aa_defense": 6}
@@ -151,11 +153,16 @@ class FactoredEnv:
         self.obs = obs
         self.prev_trade = self._trade(obs)
         self.prev_income = self._mass_income(obs)
+        self.income_history: dict[str, deque] = {}
+        self._note_incomes(obs)
         self._decode(obs)
         self.prev_acu_health = self._acu_health()
         if self.recorder is not None:
             c = self.config
             self.recorder.start(info, {"map": c.map, "faction": c.faction, "ai": c.ai, "ai_faction": c.ai_faction,
+                                       "cheat": c.cheat, "slots": list(c.slots) if c.slots else None,
+                                       "player_ai": c.player_ai, "capture": self.fa.capture,
+                                       "shadow": self.fa.shadow,
                                        "seed": c.seed, "victory": c.victory, "decision_ticks": self.decision_ticks,
                                        "time_limit_ticks": self.time_limit_ticks, "me": self.me})
         return self.encode(), {"tick": obs.get("tick", 0), "load_seconds": info.get("load_seconds", 0.0)}
@@ -482,8 +489,11 @@ class FactoredEnv:
             self.last_ok[h] = 0.0 if failed else 1.0
         self.obs = obs
         self._decode(obs)
+        self._note_incomes(obs)
         tick = obs.get("tick", 0)
         outcome = info.get("outcome")
+        if outcome == "defeat" and self._draw(obs):
+            outcome = "draw"
         time_up = tick >= self.time_limit_ticks
         done = bool(terminated or truncated or time_up)
         trade = self._trade(obs)
@@ -506,6 +516,8 @@ class FactoredEnv:
             rewards["terminal"] = 10.0 + 5.0 * max(0.0, 1.0 - tick / max(1, self.time_limit_ticks))
         elif outcome == "defeat":
             rewards["terminal"] = -10.0
+        elif outcome == "draw":
+            rewards["terminal"] = 0.0
         elif done:
             rewards["terminal"] = 5.0 * self.value_advantage(obs)
             outcome = "timeout"
@@ -699,16 +711,45 @@ class FactoredEnv:
         a = army(obs, self.me) or {}
         return float(((a.get("eco") or {}).get("mass") or {}).get("income") or 0.0)   # empty once defeated
 
-    def _value(self, p: dict) -> float:
+    def _note_incomes(self, obs) -> None:
+        """Each army's privileged mass income, the last INCOME_WINDOW decisions (value_advantage)."""
+        history = getattr(self, "income_history", None)
+        if history is None:
+            history = self.income_history = {}
+        for key, p in (obs.get("privileged") or {}).items():
+            if isinstance(p, dict):
+                history.setdefault(str(key), deque(maxlen=INCOME_WINDOW)).append(float(p.get("massIncome") or 0.0))
+
+    def _income(self, key: str, p: dict) -> float:
+        """An army's mass income for its value: the median of its last INCOME_WINDOW decisions. The engine's
+        income includes reclaim, which jumps ~17/s between decisions (learn_rl, 2026-10-11): x60 in the value, a
+        reclaim burst at the last decision moved the timeout's value advantage, and with it the timeout terminal
+        (bugs-env L8, 2026-10-17). A median over 30 s keeps steady income, reclaim included, and drops the bursts."""
+        hist = (getattr(self, "income_history", None) or {}).get(key)
+        if hist:
+            return float(np.median(np.asarray(hist, np.float64)))
+        return float(p.get("massIncome") or 0.0)
+
+    def _value(self, p: dict, key: str | None = None) -> float:
+        income = self._income(key, p) if key is not None else float(p.get("massIncome") or 0)
         return float((p.get("armyMass") or 0) + (p.get("structureMass") or 0) + (p.get("engineerMass") or 0)
-                     + 60.0 * (p.get("massIncome") or 0))
+                     + 60.0 * income)
 
     def value_advantage(self, obs) -> float:
         """(own - enemy) total value over their sum, in [-1, 1]; privileged (reward and critic only)."""
         priv = obs.get("privileged") or {}
-        mine = self._value(priv.get(str(self.me), {}))
-        theirs = sum(self._value(priv.get(str(i), {})) for i in self.enemy_indices)
+        mine = self._value(priv.get(str(self.me), {}), str(self.me))
+        theirs = sum(self._value(priv.get(str(i), {}), str(i)) for i in self.enemy_indices)
         return (mine - theirs) / max(1000.0, mine + theirs)
+
+    def _draw(self, obs) -> bool:
+        """Both sides lost at once (commanders killed in the same moment: an assassination draw). The bridge
+        reports a defeat for our army then, which was scored -10 like a lost game (bugs-env L10, 2026-10-17)."""
+        me = army(obs, self.me) or {}
+        if me.get("status") == "Draw":
+            return True
+        enemies = [a for a in obs.get("armies", []) if a.get("relation") == "enemy" and not a.get("civilian")]
+        return bool(enemies) and all(a.get("defeated") for a in enemies)
 
     def episode_summary(self, obs, outcome) -> dict:
         me = army(obs, self.me) or {}

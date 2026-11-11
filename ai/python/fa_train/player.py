@@ -8,7 +8,9 @@ HOME/config.json (re-read before every round, so it can be changed while the ser
      "labels": "m28", "minutes": 40, "maps": "small", "temperature": 0.5, "bin_dir": "~/fa/bin"}
 
 - HOME/current.pt is the network to play. The learner uploads a new one as HOME/incoming.pt and renames it to
-  current.pt (atomic); each lane picks it up at its next round.
+  current.pt (atomic); each lane picks it up at its next round. Config "network" (every lane) or "lane_networks"
+  ({"10": "champion.pt"}, by lane number with its offset) make lanes play another file of HOME instead (the
+  learner's control lane plays its champion.pt).
 - Each lane loops on its own (one deciding process and `workers` games): a slow game in one lane never leaves
   another lane's CPUs idle. A round is `games_per_ai` games per opponent per worker. A lane starts its next round
   once no more than `tail` games of the current one are still playing (default workers // 3): the last long games
@@ -62,6 +64,24 @@ def log(msg: str) -> None:
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
 
 
+def lane_network(cfg: dict, lane: int) -> str:
+    """The file of HOME a lane plays (`lane`: its number with the offset, as in the round names): current.pt, or
+    config "network" for every lane, or "lane_networks": {"10": "champion.pt"} for one. 2026-10-17: the control
+    lane -- the learner's own PC playing the champion (rl_loop --control-lane), so every candidate is compared with
+    champion games played at the same time. Only a plain file name of HOME (no paths)."""
+    name = str((cfg.get("lane_networks") or {}).get(str(lane), cfg.get("network") or "current.pt"))
+    return name if name == Path(name).name and name.endswith(".pt") else "current.pt"
+
+
+def seed_base_for(minute: int, lane: int) -> int:
+    """A round's seed base: distinct per minute and lane (with its offset), and a valid game seed (< 2^31).
+    2026-10-16 review: minute (mod 10^5) x 10^4 + lane x 10^3 used the lane without its offset, so the PC's lane 10
+    (lane 0 + offset 10) and the server's lane 0 started in the same minute drew the same seeds -- seen once: 70
+    identical schedule rows (map, factions, opponent, sim seed); and a lane >= 10 ran into the next minute's lane 0.
+    Now 100 lane slots of 10^3 seeds per minute; the minutes repeat after ~14 days (20,000)."""
+    return (minute % 20_000) * 100_000 + (lane % 100) * 1_000
+
+
 def outcomes(results: Path) -> dict | None:
     try:
         return json.loads(results.read_text()).get("summary")
@@ -72,7 +92,7 @@ def outcomes(results: Path) -> dict | None:
 def play_round(home: Path, lane: int, cfg: dict, seed_base: int, state: dict | None = None) -> Path | None:
     """One round of one lane; returns its folder when it finished. `state` gets the round's folder and its number
     of games as soon as it starts (for the lane's overlap of rounds)."""
-    current = home / "current.pt"
+    current = home / lane_network(cfg, lane + LANE_OFFSET)
     if not current.exists():
         log(f"lane {lane}: no {current} yet; waiting")
         return None
@@ -94,7 +114,10 @@ def play_round(home: Path, lane: int, cfg: dict, seed_base: int, state: dict | N
             "seed_base": seed_base, "host": os.uname().nodename if hasattr(os, "uname") else ""}
     (folder / "round.json").write_text(json.dumps(meta, indent=1))
     env = dict(os.environ, OMP_NUM_THREADS=str(cfg["torch_threads"]), MKL_NUM_THREADS=str(cfg["torch_threads"]),
-               FA_ENV_BIN_DIR=str(Path(os.path.expanduser(cfg["bin_dir"]))))
+               FA_ENV_BIN_DIR=str(Path(os.path.expanduser(cfg["bin_dir"]))),
+               FA_ENV_EXTRA_ARGS=str(cfg.get("engine_args") or ""),
+               FA_ENV_DRAIN_FILE=str(home / "PAUSE"))
+    env.update({str(k): str(v) for k, v in ((cfg.get("lane_env") or {}).get(str(lane)) or {}).items()})
     cmd = [sys.executable, "-u", "examples/tools_eval.py", "--checkpoint", str(snapshot), "--run", str(folder / "eval"),
            "--ai", ",".join(ais), "--games", str(int(cfg["games_per_ai"]) * int(cfg["workers"])),
            "--maps", str(cfg["maps"]), "--factions", "1,2,3,4", "--ai-factions", "1,2,3,4",
@@ -163,9 +186,9 @@ def lane_loop(home: Path, lane: int) -> None:
             if "folder" not in st or st["games"] - finished_games(st["folder"]) > tail:
                 time.sleep(20)
                 continue
-        # distinct per lane and round, and a valid game seed: minute of the epoch (mod 10^5) x 10^4 + lane x 10^3;
-        # a round uses seed_base + game index (< 10^3 per opponent)
-        seed_base = (int(time.time()) // 60 % 100_000) * 10_000 + lane * 1_000
+        # distinct per lane (with its offset) and round, and a valid game seed (seed_base_for); a round uses
+        # seed_base + game index (< 10^3 per opponent)
+        seed_base = seed_base_for(int(time.time()) // 60, lane + LANE_OFFSET)
         state = {}
         t = threading.Thread(target=run, args=(cfg, seed_base, state), daemon=True)
         t.start()

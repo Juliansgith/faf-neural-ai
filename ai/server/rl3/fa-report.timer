@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily FA RL run report
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

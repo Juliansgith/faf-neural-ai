@@ -1,9 +1,14 @@
+try:                                   # first: no test may reach the server or start a real process
+    import no_network  # noqa: F401
+except ImportError:
+    from tests import no_network  # noqa: F401
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from fa_train.rl_loop import collapsed, lineage, m28_level_rate, matched, opponent_mix, regression, sha256
+from fa_train.rl_loop import (collapsed, lineage, m28_ai_maps, m28_level_rate, matched, opponent_mix, regression,
+                              sha256)
 
 
 def write_round(root: Path, name: str, sha: str, outcomes: dict, done: bool = True):
@@ -38,6 +43,55 @@ class RlLoopTest(unittest.TestCase):
             write_round(root, "lane2_c", "old", {"m28aicheat@0.6": (12, 12)})
             write_round(root, "lane3_d", "net1", {"m28aicheat@0.6": (12, 12)}, done=False)
             self.assertEqual(m28_level_rate(root, {"net1", "net2"}, 0.6), (12, 24))
+
+    def test_m28_level_rate_on_a_levels_own_maps(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            r = root / "lane0_a"
+            (r / "eval").mkdir(parents=True)
+            (r / "round.json").write_text(json.dumps({"checkpoint_sha256": "net1"}))
+            (r / "DONE").write_text("x")
+            games = [("SCMP_012", "victory")] * 3 + [("SCMP_012", "defeat")] + [("SCMP_019", "defeat")] * 5 \
+                + [("SCMP_019", "victory")]
+            (r / "eval" / "episodes.jsonl").write_text("".join(
+                json.dumps({"ai": "m28aicheat@0.6", "map": m, "outcome": o}) + "\n" for m, o in games))
+            self.assertEqual(m28_level_rate(root, {"net1"}, 0.6), (4, 10))
+            self.assertEqual(m28_level_rate(root, {"net1"}, 0.6, {"SCMP_012"}), (3, 4))
+            self.assertEqual(m28_level_rate(root, {"net1"}, 0.6, {"SCMP_019", "SCMP_023"}), (1, 6))
+            # a round without its games (only the summary) cannot be split by map
+            write_round(root, "lane1_b", "net1", {"m28aicheat@0.6": (7, 12)})
+            self.assertEqual(m28_level_rate(root, {"net1"}, 0.6, {"SCMP_012"}), (3, 4))
+            self.assertEqual(m28_level_rate(root, {"net1"}, 0.6), (11, 22))
+
+    def test_wide_map_level_is_a_slot_with_its_own_maps(self):
+        base = opponent_mix(.75, "adaptive,rush,tech", 4, "rl_000", 4, full_weight=0, stretch_weight=2)
+        mix = opponent_mix(.75, "adaptive,rush,tech", 4, "rl_000", 4, full_weight=0, stretch_weight=2,
+                           wide_level=.55, wide_weight=4)
+        self.assertEqual(mix, "adaptive,rush,tech,m28aicheat@0.75:4,m28aicheat@0.9:2,self@rl_000:4,m28aicheat@0.55:4")
+        maps = m28_ai_maps({"m28aicheat": "SCMP_012,SCMP_019", "rush": "SCMP_017"}, base, .55, "SCMP_012,SCMP_013",
+                           "SCMP_019,SCMP_017")
+        self.assertEqual(maps, {"rush": "SCMP_017", "m28aicheat@0.75": "SCMP_012,SCMP_013",
+                                "m28aicheat@0.9": "SCMP_012,SCMP_013", "m28aicheat@0.55": "SCMP_019,SCMP_017"})
+        # the wide level reaches the small maps' level: one name, both lists, the weights added
+        mix = opponent_mix(.75, "rush", 4, full_weight=0, stretch_weight=2, wide_level=.75, wide_weight=4)
+        self.assertEqual(mix, "rush,m28aicheat@0.75:8,m28aicheat@0.9:2")
+        maps = m28_ai_maps(None, opponent_mix(.75, "rush", 4, full_weight=0, stretch_weight=2), .75, "SCMP_012",
+                           "SCMP_019")
+        self.assertEqual(maps, {"m28aicheat@0.75": "SCMP_012,SCMP_019", "m28aicheat@0.9": "SCMP_012"})
+        # without the wide level nothing changes
+        self.assertEqual(opponent_mix(.75, "rush", 4, full_weight=0, stretch_weight=2), "rush,m28aicheat@0.75:4,m28aicheat@0.9:2")
+
+    def test_fixed_target_merges_overlap_and_survives_curriculum_change(self):
+        mix = opponent_mix(.75, 'adaptive,rush,tech', 3, full_weight=0, stretch_weight=2,
+                           target_m28=.9, target_weight=6)
+        self.assertEqual(mix, 'adaptive,rush,tech,m28aicheat@0.75:3,m28aicheat@0.9:8')
+        changed = opponent_mix(.8, 'adaptive,rush,tech', 3, full_weight=0, stretch_weight=2,
+                               target_m28=.9, target_weight=6)
+        self.assertIn('m28aicheat@0.95:2', changed)
+        self.assertIn('m28aicheat@0.9:6', changed)
+        for multiplier, weight in ((None, 2), (.9, -1), (1.1, 2), (.9, float('nan'))):
+            with self.subTest(multiplier=multiplier, weight=weight), self.assertRaises(ValueError):
+                opponent_mix(.75, 'rush', 3, target_m28=multiplier, target_weight=weight)
 
 
 class LineageTest(unittest.TestCase):

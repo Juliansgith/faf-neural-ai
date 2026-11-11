@@ -30,7 +30,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .tools_model import (action_row, actions_to_commands, apply_model_options, empty_unit_labels, model_options,
+from .tools_model import (action_row, actions_to_commands, apply_model_options, compatible_optimizer_state,
+                          empty_unit_labels, model_options,
                           stack_actions,
                           ACTION_KEYS, K, ToolsNet, collate, commands_to_indices, empty_labels, indices_to_commands,
                           parameter_count)
@@ -486,6 +487,8 @@ class ToolsTrainer(Trainer):
                     policy = {"logp": round(float(logp[i]), 5), "value": round(float(value[i]), 5),
                               "mode": mode, "temperature": temperature,
                               "action": compact_action(acts_np, i, n_tok, self.cfg.decoder)}
+                    from .probability_accounting import semantics
+                    policy["logp_semantics"] = semantics(self.acting)
                     if unit_logp is not None:
                         policy["unit_logp"] = [round(float(x), 5) for x in unit_logp[i][:n_tok]]
                     w.conn.send(("act", commands, policy))
@@ -635,6 +638,15 @@ class ToolsTrainer(Trainer):
         # [] is an intentional END label; a nonempty but fully masked list is unknown behavior.
         return accepted, (not cmds or bool(accepted))
 
+    def _teacher_view(self, obs):
+        if getattr(getattr(self, 'net', None), 'air_refueling', False):
+            from fa_env.refueling import enabled_observation
+            obs = enabled_observation(obs)
+        if getattr(getattr(self, 'net', None), 'queued_factory_upgrades', False):
+            from fa_env.factory_upgrades import enabled_observation as factory_view
+            obs = factory_view(obs)
+        return obs
+
     def _prepare_teacher_rows(self, mb: list, L: int) -> tuple[dict, float]:
         """Filter labels once and count only rows that can contribute distillation loss in the whole minibatch."""
         rows = {}
@@ -642,7 +654,7 @@ class ToolsTrainer(Trainer):
         for seg in mb:
             commands, supervised = [], []
             for t in range(min(len(seg), L)):
-                accepted, has = self._validated_teacher_row(seg.teacher[t], seg.obs[t])
+                accepted, has = self._validated_teacher_row(seg.teacher[t], self._teacher_view(seg.obs[t]))
                 commands.append(accepted)
                 supervised.append(has)
                 count += int(has)
@@ -678,6 +690,7 @@ class ToolsTrainer(Trainer):
         labels = []
         has = []
         for i, (cmds, o) in enumerate(zip(teach, obs)):
+            o = self._teacher_view(o)
             if prevalidated:
                 accepted = cmds
                 supervised = bool(supervised_override[i]) if supervised_override is not None else False
@@ -892,7 +905,7 @@ class ToolsTrainer(Trainer):
         apply_model_options(self.acting, state)
         print(f"model options: {options}")
         if optimizer and state.get("optimizer"):
-            self.optimizer.load_state_dict(state["optimizer"])
+            self.optimizer.load_state_dict(compatible_optimizer_state(self.net, state["optimizer"], state["model"]))
         self.update = state.get("update", 0)
         self.episodes = max(self.episodes, state.get("episodes", 0))
         self.stage = min(state.get("stage", 0), len(self.stages) - 1)

@@ -1,0 +1,19 @@
+[Unit]
+Description=FA RL learner on this machine (fa_train.rl_loop --no-remote): see ~/SERVICES.md
+After=network-online.target
+
+[Service]
+User=agent
+WorkingDirectory=/home/agent/faf-neural-ai/ai/python
+ExecStart=/bin/bash /home/agent/fa/rl3/rl3_learner.sh
+Restart=on-failure
+RestartSec=300
+LimitNOFILE=200000
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=120
+Nice=5
+MemoryMax=80G
+
+[Install]
+WantedBy=multi-user.target
